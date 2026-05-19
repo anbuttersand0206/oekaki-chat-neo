@@ -1,0 +1,30 @@
+version: '3.9'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      CORS_ORIGIN: "http://localhost:8080"
+    restart: unless-stopped
+    networks:
+      - oekaki-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - oekaki-net
+
+networks:
+  oekaki-net:
+    driver: bridge

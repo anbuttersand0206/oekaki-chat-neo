@@ -1,0 +1,47 @@
+# ── Default: normalize line endings to LF in repo ────────────────────────────
+* text=auto eol=lf
+
+# ── Source code ───────────────────────────────────────────────────────────────
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.js        text eol=lf
+*.mjs       text eol=lf
+*.cjs       text eol=lf
+*.cpp       text eol=lf
+*.h         text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.toml      text eol=lf
+*.sh        text eol=lf
+Makefile    text eol=lf
+Dockerfile  text eol=lf
+
+# ── SVG (text but keep as-is for diffs) ──────────────────────────────────────
+*.svg       text eol=lf
+
+# ── Binary assets (no diff / no merge) ───────────────────────────────────────
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.wasm      binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+*.otf       binary
+*.eot       binary
+*.pdf       binary
+*.zip       binary
+*.gz        binary
+*.tar       binary
+
+# ── Wasm JS glue — disable diff (minified, unreadable) ───────────────────────
+frontend/public/brush_engine.js -diff
+
+# ── Lock files — diff as text, never merge automatically ─────────────────────
+package-lock.json   text eol=lf merge=ours

@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>お絵描きチャット</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/src/styles/main.css" />
+  <script>(function(){var t=localStorage.getItem('theme')||'dark';document.documentElement.dataset.theme=t;})()</script>
+</head>
+<body>
+
+<!-- ===================== ROOM SCREEN ===================== -->
+<div id="room-screen" class="screen active">
+  <div class="room-bg-grid"></div>
+  <button class="theme-toggle-btn" id="theme-toggle-room" title="テーマ切り替え" aria-label="テーマ切り替え">
+    <svg class="theme-icon theme-icon--sun" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="3"/><line x1="8" y1="1.5" x2="8" y2="3.5"/><line x1="8" y1="12.5" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="3.5" y2="8"/><line x1="12.5" y1="8" x2="14.5" y2="8"/><line x1="3.4" y1="3.4" x2="4.8" y2="4.8"/><line x1="11.2" y1="11.2" x2="12.6" y2="12.6"/><line x1="12.6" y1="3.4" x2="11.2" y2="4.8"/><line x1="4.8" y1="11.2" x2="3.4" y2="12.6"/></svg>
+    <svg class="theme-icon theme-icon--moon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 8.53A6 6 0 1 1 7.47 2 4.67 4.67 0 0 0 14 8.53z"/></svg>
+  </button>
+  <div class="room-dialog glass">
+    <div class="room-logo">
+      <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+        <circle cx="24" cy="24" r="22" fill="#1e1e2e" stroke="#5b8fff" stroke-width="2"/>
+        <path d="M14 30 Q18 14 24 18 Q30 22 34 14" stroke="#5b8fff" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+        <circle cx="34" cy="14" r="3" fill="#ff6b9d"/>
+      </svg>
+      <h1>お絵描きチャット</h1>
+    </div>
+
+    <div class="tab-row">
+      <button class="tab-btn active" data-tab="join">部屋に入る</button>
+      <button class="tab-btn" data-tab="create">部屋を作る</button>
+    </div>
+
+    <div id="tab-join" class="tab-pane active">
+      <div class="field-group">
+        <label>部屋ID</label>
+        <input type="text" id="join-room-id" placeholder="room-id" autocomplete="off" spellcheck="false"/>
+      </div>
+      <div class="field-group">
+        <label>パスワード</label>
+        <input type="password" id="join-password" placeholder="password"/>
+      </div>
+      <div class="field-group">
+        <label>ニックネーム</label>
+        <input type="text" id="join-username" placeholder="あなたの名前" maxlength="20"/>
+      </div>
+      <button id="join-btn" class="primary-btn">入る</button>
+    </div>
+
+    <div id="tab-create" class="tab-pane">
+      <div class="field-group">
+        <label>部屋ID <span class="hint">英数字・_ ・- 最大32文字</span></label>
+        <input type="text" id="create-room-id" placeholder="my-room" autocomplete="off" spellcheck="false"/>
+      </div>
+      <div class="field-group">
+        <label>パスワード</label>
+        <input type="password" id="create-password" placeholder="password"/>
+      </div>
+      <div class="field-group">
+        <label>ニックネーム</label>
+        <input type="text" id="create-username" placeholder="あなたの名前" maxlength="20"/>
+      </div>
+      <button id="create-btn" class="primary-btn">作成して入る</button>
+    </div>
+
+    <div id="room-error" class="error-msg" hidden></div>
+  </div>
+</div>
+
+<!-- ===================== DRAW SCREEN ===================== -->
+<div id="draw-screen" class="screen">
+
+  <!-- ── Top menu bar ── -->
+  <div id="menubar">
+    <span class="app-name">お絵描きチャット</span>
+    <div class="menu-items">
+      <div class="menu-group" data-menu="file">
+        <button class="menu-btn">ファイル</button>
+        <div class="dropdown">
+          <button data-action="save-png">PNG で保存</button>
+          <button data-action="save-jpg">JPEG で保存</button>
+        </div>
+      </div>
+      <div class="menu-group" data-menu="edit">
+        <button class="menu-btn">編集</button>
+        <div class="dropdown">
+          <button data-action="undo">元に戻す <kbd>Ctrl+Z</kbd></button>
+          <button data-action="redo">やり直す <kbd>Ctrl+Y</kbd></button>
+          <hr/>
+          <button data-action="cut">切り取り <kbd>Ctrl+X</kbd></button>
+          <button data-action="copy">コピー <kbd>Ctrl+C</kbd></button>
+          <button data-action="paste">貼り付け <kbd>Ctrl+V</kbd></button>
+          <hr/>
+          <button data-action="select-all">すべて選択 <kbd>Ctrl+A</kbd></button>
+          <button data-action="deselect">選択解除 <kbd>Ctrl+D</kbd></button>
+          <hr/>
+          <button data-action="clear-canvas">キャンバスをクリア</button>
+        </div>
+      </div>
+      <div class="menu-group" data-menu="view">
+        <button class="menu-btn">表示</button>
+        <div class="dropdown">
+          <button data-action="zoom-in">ズームイン <kbd>+</kbd></button>
+          <button data-action="zoom-out">ズームアウト <kbd>-</kbd></button>
+          <button data-action="zoom-reset">実際のサイズ <kbd>0</kbd></button>
+          <button data-action="zoom-fit">画面に合わせる</button>
+        </div>
+      </div>
+    </div>
+    <div id="room-info">
+      <span id="room-id-display"></span>
+      <span id="user-count-display"></span>
+      <button class="theme-toggle-btn" id="theme-toggle-draw" title="テーマ切り替え" aria-label="テーマ切り替え">
+        <svg class="theme-icon theme-icon--sun" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="3"/><line x1="8" y1="1.5" x2="8" y2="3.5"/><line x1="8" y1="12.5" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="3.5" y2="8"/><line x1="12.5" y1="8" x2="14.5" y2="8"/><line x1="3.4" y1="3.4" x2="4.8" y2="4.8"/><line x1="11.2" y1="11.2" x2="12.6" y2="12.6"/><line x1="12.6" y1="3.4" x2="11.2" y2="4.8"/><line x1="4.8" y1="11.2" x2="3.4" y2="12.6"/></svg>
+        <svg class="theme-icon theme-icon--moon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 8.53A6 6 0 1 1 7.47 2 4.67 4.67 0 0 0 14 8.53z"/></svg>
+      </button>
+      <button id="leave-room-btn" title="退室">✕</button>
+    </div>
+  </div>
+
+  <!-- ── Main workspace ── -->
+  <div id="workspace">
+
+    <!-- Left toolbar -->
+    <div id="left-toolbar">
+      <div class="tool-section">
+        <button class="tool-btn active" data-tool="brush" title="ブラシ (B)">
+          <svg viewBox="0 0 24 24"><path d="M7 14c-1.66 0-3 1.34-3 3 0 1.31-1.16 2-2 2 .92 1.22 2.49 2 4 2 2.21 0 4-1.79 4-4 0-1.66-1.34-3-3-3zm13.71-9.37l-1.34-1.34c-.39-.39-1.02-.39-1.41 0L9 12.25 11.75 15l8.96-8.96c.39-.39.39-1.02 0-1.41z"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="eraser" title="消しゴム (E)">
+          <svg viewBox="0 0 24 24"><path d="M15.14 3c-.51 0-1.02.2-1.41.59L2.59 14.73c-.78.78-.78 2.05 0 2.83L5.03 20H20v-2h-8.36L2.59 8.95 11.73 3.59c.22-.22.48-.41.75-.59zM13 20l-2.5-2.5L20.77 7.23l2.5 2.5L13 20z"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="fill" title="塗りつぶし (G)">
+          <svg viewBox="0 0 24 24"><path d="M16.56 8.94L7.62 0 6.21 1.41l2.38 2.38-5.15 5.15c-.59.59-.59 1.54 0 2.12l5.5 5.5c.29.29.68.44 1.06.44s.77-.15 1.06-.44l5.5-5.5c.59-.58.59-1.53 0-2.12zM5.21 10L10 5.21 14.79 10H5.21zM19 11.5s-2 2.17-2 3.5c0 1.1.9 2 2 2s2-.9 2-2c0-1.33-2-3.5-2-3.5z"/></svg>
+        </button>
+      </div>
+      <div class="tool-separator"></div>
+      <div class="tool-section">
+        <button class="tool-btn" data-tool="rectSelect" title="矩形選択 (M)">
+          <svg viewBox="0 0 24 24"><path d="M18 4H6C4.9 4 4 4.9 4 6v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H6V6h12v12z"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="lasso" title="自由選択 (L)">
+          <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/></svg>
+        </button>
+      </div>
+      <div class="tool-separator"></div>
+      <div class="tool-section">
+        <button class="tool-btn" data-tool="pan" title="手のひら (H / Space)">
+          <svg viewBox="0 0 24 24"><path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.08 0-2.1-.43-2.85-1.19L1 14.83s1.26-1.23 1.3-1.25c.22-.19.49-.29.79-.29.22 0 .42.06.6.16.04.01 4.31 2.46 4.31 2.46V4c0-.83.67-1.5 1.5-1.5S11 3.17 11 4v7h1V1.5c0-.83.67-1.5 1.5-1.5S15 .67 15 1.5V11h1V2.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5V11h1V5.5c0-.83.67-1.5 1.5-1.5S23 4.67 23 5.5z"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="eyedropper" title="スポイト (I / Alt+クリック)">
+          <svg viewBox="0 0 24 24"><path d="M20.71 5.63l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-3.12 3.12-1.41-1.42-1.42 1.42 1.41 1.41-6.6 6.6A2 2 0 005 16v3h3a2 2 0 001.42-.59l6.6-6.6 1.41 1.42 1.42-1.42-1.42-1.41 3.12-3.12c.4-.4.4-1.03.16-1.65zM8 17H7v-1l6.6-6.6 1 1L8 17z"/></svg>
+        </button>
+      </div>
+      <div class="tool-separator"></div>
+      <!-- Color swatches -->
+      <div class="color-swatch-area">
+        <div id="secondary-swatch" class="color-swatch secondary" title="背景色"></div>
+        <div id="primary-swatch" class="color-swatch primary" title="描画色"></div>
+        <button id="swap-colors-btn" title="色を交換 (X)">
+          <svg viewBox="0 0 24 24"><path d="M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Canvas area -->
+    <div id="canvas-wrapper">
+      <div id="canvas-container">
+        <canvas id="main-canvas"></canvas>
+        <canvas id="overlay-canvas"></canvas>
+        <!-- Remote cursors rendered here -->
+        <div id="remote-cursors"></div>
+      </div>
+    </div>
+
+    <!-- Right panel (collapsible) -->
+    <div id="right-panel-wrap">
+      <button id="right-panel-toggle" title="パネルを折りたたむ (P)">
+        <svg id="rpt-icon" viewBox="0 0 10 20" width="10" height="20"><polyline points="3,4 8,10 3,16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    <div id="right-panel">
+
+      <!-- Color section -->
+      <div class="panel-section" id="color-section">
+        <div class="panel-header collapsible" data-target="color-body">
+          <span>カラー</span><span class="collapse-icon">▾</span>
+        </div>
+        <div class="panel-body" id="color-body">
+          <div id="color-wheel-canvas-wrapper">
+            <canvas id="color-wheel-canvas" width="220" height="220"></canvas>
+          </div>
+          <div id="color-inputs">
+            <div class="color-input-row">
+              <label>R</label><input type="number" id="ci-r" min="0" max="255" value="0"/>
+              <label>G</label><input type="number" id="ci-g" min="0" max="255" value="0"/>
+              <label>B</label><input type="number" id="ci-b" min="0" max="255" value="0"/>
+            </div>
+            <div class="color-input-row">
+              <label>H</label><input type="number" id="ci-h" min="0" max="360" value="0"/>
+              <label>S</label><input type="number" id="ci-s" min="0" max="100" value="0"/>
+              <label>L</label><input type="number" id="ci-l" min="0" max="100" value="0"/>
+            </div>
+            <div class="color-input-row hex-row">
+              <label>#</label>
+              <input type="text" id="ci-hex" maxlength="6" value="000000" spellcheck="false"/>
+            </div>
+          </div>
+          <div id="palette-row">
+            <div class="palette-swatch" data-color="#000000" style="background:#000"></div>
+            <div class="palette-swatch" data-color="#ffffff" style="background:#fff"></div>
+            <div class="palette-swatch" data-color="#ff4444" style="background:#f44"></div>
+            <div class="palette-swatch" data-color="#ff9922" style="background:#f92"></div>
+            <div class="palette-swatch" data-color="#ffee22" style="background:#fe2"></div>
+            <div class="palette-swatch" data-color="#44cc44" style="background:#4c4"></div>
+            <div class="palette-swatch" data-color="#2299ff" style="background:#29f"></div>
+            <div class="palette-swatch" data-color="#9944ff" style="background:#94f"></div>
+            <div class="palette-swatch" data-color="#ff44aa" style="background:#f4a"></div>
+            <div class="palette-swatch" data-color="#888888" style="background:#888"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Brush section -->
+      <div class="panel-section" id="brush-section">
+        <div class="panel-header collapsible" data-target="brush-body">
+          <span>ブラシ</span><span class="collapse-icon">▾</span>
+        </div>
+        <div class="panel-body" id="brush-body">
+
+          <!-- Brush type grid -->
+          <div id="brush-type-grid">
+            <button class="brush-type-btn active" data-brush-type="pen"        title="ペン">ペン</button>
+            <button class="brush-type-btn"        data-brush-type="marker"     title="マーカー">マーカー</button>
+            <button class="brush-type-btn"        data-brush-type="pencil"     title="鉛筆">鉛筆</button>
+            <button class="brush-type-btn"        data-brush-type="crayon"     title="クレヨン">クレヨン</button>
+            <button class="brush-type-btn"        data-brush-type="airbrush"   title="エアブラシ">エアブラシ</button>
+            <button class="brush-type-btn"        data-brush-type="watercolor" title="水彩">水彩</button>
+            <button class="brush-type-btn"        data-brush-type="oil"        title="油彩">油彩</button>
+            <button class="brush-type-btn"        data-brush-type="pastel"     title="パステル">パステル</button>
+            <button class="brush-type-btn"        data-brush-type="blur"       title="ぼかし">ぼかし</button>
+          </div>
+
+          <!-- Common params -->
+          <div class="bp-sliders">
+            <div class="slider-row">
+              <label>サイズ</label>
+              <input type="range" id="bp-size" min="1" max="500" value="4"/>
+              <input type="number" id="bp-size-num" min="1" max="500" value="4" class="slider-num"/>
+            </div>
+            <div class="slider-row">
+              <label>不透明度</label>
+              <input type="range" id="bp-opacity" min="0" max="100" value="100"/>
+              <input type="number" id="bp-opacity-num" min="0" max="100" value="100" class="slider-num"/>
+            </div>
+            <div class="slider-row">
+              <label>濃度</label>
+              <input type="range" id="bp-density" min="0" max="100" value="100"/>
+              <input type="number" id="bp-density-num" min="0" max="100" value="100" class="slider-num"/>
+            </div>
+            <div class="slider-row">
+              <label>間隔</label>
+              <input type="range" id="bp-spacing" min="1" max="200" value="5"/>
+              <input type="number" id="bp-spacing-num" min="1" max="200" value="5" class="slider-num"/>
+            </div>
+            <div class="slider-row">
+              <label>ハード</label>
+              <input type="range" id="bp-hardness" min="0" max="100" value="95"/>
+              <input type="number" id="bp-hardness-num" min="0" max="100" value="95" class="slider-num"/>
+            </div>
+          </div>
+
+          <!-- Wet brush params -->
+          <div id="bp-wet-section" style="display:none">
+            <div class="bp-section-label">混色パラメーター</div>
+            <div class="slider-row">
+              <label>混色</label>
+              <input type="range" id="bp-mixing" min="0" max="100" value="20"/>
+              <input type="number" id="bp-mixing-num" min="0" max="100" value="20" class="slider-num"/>
+            </div>
+            <div class="slider-row">
+              <label>水分量</label>
+              <input type="range" id="bp-water" min="0" max="100" value="70"/>
+              <input type="number" id="bp-water-num" min="0" max="100" value="70" class="slider-num"/>
+            </div>
+            <div class="slider-row">
+              <label>色伸び</label>
+              <input type="range" id="bp-spread" min="0" max="100" value="50"/>
+              <input type="number" id="bp-spread-num" min="0" max="100" value="50" class="slider-num"/>
+            </div>
+          </div>
+
+          <!-- Brush preview -->
+          <div id="brush-preview-area">
+            <canvas id="brush-preview" width="208" height="44"></canvas>
+          </div>
+
+          <!-- Parameter modifier section -->
+          <div id="bp-modifier-section">
+            <div class="bp-section-label">パラメーター調整</div>
+            <!-- Param selector -->
+            <div id="bp-param-selector">
+              <button class="bp-param-btn active" data-mod-param="size">サイズ</button>
+              <button class="bp-param-btn" data-mod-param="opacity">不透明度</button>
+              <button class="bp-param-btn" data-mod-param="density">濃度</button>
+              <button class="bp-param-btn" data-mod-param="spacing">間隔</button>
+              <button class="bp-param-btn" data-mod-param="mixing">混色</button>
+              <button class="bp-param-btn" data-mod-param="water">水分量</button>
+              <button class="bp-param-btn" data-mod-param="spread">色伸び</button>
+            </div>
+            <!-- Pressure curve -->
+            <div class="curve-block">
+              <div class="curve-header collapsible" data-target="curve-pressure-body">
+                <span class="curve-label">筆圧曲線</span>
+                <div class="curve-header-right">
+                  <button class="curve-reset-btn" id="curve-pressure-reset">リセット</button>
+                  <span class="collapse-icon">▸</span>
+                </div>
+              </div>
+              <div id="curve-pressure-body" style="display:none">
+                <canvas id="curve-pressure" class="curve-canvas"></canvas>
+                <div class="curve-presets" id="curve-pressure-presets">
+                  <button class="curve-preset-btn" data-preset="flat">フラット</button>
+                  <button class="curve-preset-btn" data-preset="linear">リニア</button>
+                  <button class="curve-preset-btn" data-preset="soft">ソフト</button>
+                  <button class="curve-preset-btn" data-preset="hard">ハード</button>
+                  <button class="curve-preset-btn" data-preset="scurve">S字</button>
+                </div>
+              </div>
+            </div>
+            <!-- Speed curve -->
+            <div class="curve-block">
+              <div class="curve-header collapsible" data-target="curve-speed-body">
+                <span class="curve-label">速度曲線</span>
+                <div class="curve-header-right">
+                  <button class="curve-reset-btn" id="curve-speed-reset">リセット</button>
+                  <span class="collapse-icon">▸</span>
+                </div>
+              </div>
+              <div id="curve-speed-body" style="display:none">
+                <canvas id="curve-speed" class="curve-canvas"></canvas>
+                <div class="curve-presets" id="curve-speed-presets">
+                  <button class="curve-preset-btn" data-preset="flat">フラット</button>
+                  <button class="curve-preset-btn" data-preset="linear">リニア</button>
+                  <button class="curve-preset-btn" data-preset="soft">ソフト</button>
+                  <button class="curve-preset-btn" data-preset="hard">ハード</button>
+                  <button class="curve-preset-btn" data-preset="scurve">S字</button>
+                </div>
+              </div>
+            </div>
+            <!-- Random -->
+            <div class="slider-row">
+              <label>ランダム</label>
+              <input type="range" id="bp-random" min="0" max="100" value="0"/>
+            </div>
+          </div>
+
+          <!-- Paper texture -->
+          <div id="bp-texture-section">
+            <div class="bp-section-label">紙質テクスチャ</div>
+            <div class="texture-row">
+              <canvas id="bp-texture-preview" width="48" height="48" class="texture-preview"></canvas>
+              <div class="texture-btns">
+                <label class="action-btn" for="bp-texture-input">画像を選択</label>
+                <input type="file" id="bp-texture-input" accept="image/*" style="display:none"/>
+                <button class="action-btn" id="bp-texture-clear">クリア</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Users section -->
+      <div class="panel-section" id="users-section">
+        <div class="panel-header collapsible" data-target="users-body">
+          <span>ユーザー <span id="user-badge">1</span></span>
+          <span class="collapse-icon">▾</span>
+        </div>
+        <div class="panel-body" id="users-body">
+          <ul id="users-list"></ul>
+        </div>
+      </div>
+
+      <!-- Chat section -->
+      <div class="panel-section" id="chat-section">
+        <div class="panel-header collapsible" data-target="chat-body">
+          <span>チャット</span><span class="collapse-icon">▾</span>
+        </div>
+        <div class="panel-body" id="chat-body">
+          <div id="chat-messages"></div>
+          <div id="chat-input-row">
+            <input type="text" id="chat-input" placeholder="メッセージを入力..." maxlength="500"/>
+            <button id="chat-send-btn">送信</button>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /right-panel -->
+    </div><!-- /right-panel-wrap -->
+  </div><!-- /workspace -->
+
+  <!-- Selection action bar (shown when a selection is active) -->
+  <div id="selection-bar" style="display:none">
+    <!-- Normal selection mode -->
+    <div id="sel-normal" class="sel-group">
+      <span class="sel-label">選択範囲</span>
+      <span class="sel-sep"></span>
+      <button id="transform-btn" class="sel-btn" title="変形 (Ctrl+T)">変形</button>
+      <span class="sel-sep"></span>
+      <button id="cut-btn" class="sel-btn" title="切り取り (Ctrl+X)">切り取り</button>
+      <button id="copy-btn" class="sel-btn" title="コピー (Ctrl+C)">コピー</button>
+      <button id="paste-btn" class="sel-btn" title="貼り付け (Ctrl+V)">貼り付け</button>
+      <span class="sel-sep"></span>
+      <label class="sel-label" for="select-tolerance">許容値</label>
+      <input type="range" id="select-tolerance" min="0" max="255" value="30" class="sel-slider" title="塗りつぶし許容値"/>
+      <span id="select-tolerance-val" class="sel-val">30</span>
+      <span class="sel-spacer"></span>
+      <button id="deselect-btn" class="sel-btn sel-btn-muted" title="選択解除 (Ctrl+D)">選択解除</button>
+    </div>
+    <!-- Transform active mode -->
+    <div id="sel-transform" class="sel-group" style="display:none">
+      <span class="sel-label sel-label-accent">変形中</span>
+      <span class="sel-sep"></span>
+      <span class="sel-label" style="font-variant-numeric:tabular-nums">回転:&nbsp;<span id="transform-angle-label">0°</span></span>
+      <span class="sel-spacer"></span>
+      <button id="commit-transform-btn" class="sel-btn sel-btn-accent" title="変形を確定 (Enter)">確定 <kbd>↵</kbd></button>
+      <button id="cancel-transform-btn" class="sel-btn sel-btn-muted" title="変形をキャンセル (Esc)">キャンセル <kbd>Esc</kbd></button>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div id="statusbar">
+    <span id="sb-tool">ブラシ</span>
+    <span class="sb-sep">|</span>
+    <span id="sb-pos">X: 0  Y: 0</span>
+    <span class="sb-sep">|</span>
+    <span id="sb-canvas-size">1600 × 1200</span>
+    <span class="sb-sep">|</span>
+    <div id="zoom-picker-wrap">
+      <button id="sb-zoom" class="sb-zoom-btn" title="クリックでズームを変更">100%</button>
+      <div id="zoom-dropdown" class="zoom-dropdown" style="display:none">
+        <button data-zoom="25">25%</button>
+        <button data-zoom="33">33%</button>
+        <button data-zoom="50">50%</button>
+        <button data-zoom="75">75%</button>
+        <button data-zoom="100">100%</button>
+        <button data-zoom="150">150%</button>
+        <button data-zoom="200">200%</button>
+        <button data-zoom="300">300%</button>
+        <button data-zoom="400">400%</button>
+        <hr class="zoom-sep"/>
+        <div class="zoom-custom-row">
+          <input type="number" id="zoom-custom-input" min="5" max="2000" value="100"/>
+          <span>%</span>
+          <button id="zoom-custom-apply">適用</button>
+        </div>
+      </div>
+    </div>
+    <span class="sb-sep">|</span>
+    <span id="sb-engine">JS Engine</span>
+  </div>
+
+</div><!-- /draw-screen -->
+
+<!-- Wasm brush engine — loaded if present, graceful fallback otherwise -->
+<script>
+  fetch('/brush_engine.wasm', {method:'HEAD'}).then(r => {
+    if (r.ok) {
+      const s = document.createElement('script');
+      s.src = '/brush_engine.js';
+      document.head.appendChild(s);
+    }
+  }).catch(() => {});
+</script>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
