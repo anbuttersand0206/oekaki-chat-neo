@@ -1,7 +1,7 @@
 # お絵描きチャット Neo
 
 リアルタイム多人数同時お絵描きチャットアプリケーション。  
-CLIP STUDIO PAINT / FireAlpaca ライクな本格ペイント UI を備え、複数ユーザーが同じキャンバスに同時に描画できます。
+ネイティブのペイントソフトライクな本格ペイント UI を備え、複数ユーザーが同じキャンバスに同時に描画できます。
 
 ---
 
@@ -162,40 +162,53 @@ CLIP STUDIO PAINT / FireAlpaca ライクな本格ペイント UI を備え、複
 
 ## アーキテクチャ
 
-```
-                  ┌──────────────────┐
-  ブラウザ        │   nginx :80       │
-  ──────────────▶│  静的ファイル配信  │
-                  │  /api, /socket.io │
-                  │  → proxy          │
-                  └────────┬─────────┘
-                           │
-                  ┌────────▼─────────┐
-                  │  Node.js :3001    │
-                  │  Express          │
-                  │  Socket.IO        │
-                  │  bcryptjs         │
-                  │  (in-memory store)│
-                  └──────────────────┘
+```mermaid
+graph TB
+    Browser(["ブラウザ"])
 
-  フロントエンド内部
-  ┌──────────────────────────────────────────────────┐
-  │  app.ts (メインコントローラー)                    │
-  │  ┌──────────────┐  ┌───────────────────────────┐ │
-  │  │CanvasEngine  │  │SocketClient               │ │
-  │  │ zoom/pan     │  │ join_room                 │ │
-  │  │ undo/redo    │  │ draw_op 送受信             │ │
-  │  │ export       │  │ cursor_move               │ │
-  │  └──────┬───────┘  └───────────────────────────┘ │
-  │  ┌──────▼───────┐  ┌───────────────────────────┐ │
-  │  │ToolManager   │  │ColorPicker                │ │
-  │  │ WasmBrush ─┐ │  │BrushPanel + BrushStorage  │ │
-  │  │  └ TSfallbk │  │CurveEditor                │ │
-  │  │ FloodFill   │  │RoomUI                     │ │
-  │  │ SelectionMgr│  └───────────────────────────┘ │
-  │  │  transform  │                                 │
-  │  └──────────────┘                                │
-  └──────────────────────────────────────────────────┘
+    subgraph Infra["インフラ (Docker)"]
+        Nginx["nginx :80\n静的ファイル配信\n/api, /socket.io → proxy"]
+        NodeJS["Node.js :3001\nExpress / Socket.IO\nbcryptjs / in-memory store"]
+    end
+
+    subgraph FE["フロントエンド内部"]
+        AppTS["app.ts — メインコントローラー"]
+
+        subgraph CanvasSub["Canvas"]
+            CE["CanvasEngine\nzoom · pan · undo/redo · export"]
+            TM["ToolManager"]
+            WB["WasmBrush"]
+            TSF["TS fallback"]
+            FF["FloodFill"]
+            SM["SelectionMgr + transform"]
+        end
+
+        subgraph NetworkSub["Network"]
+            SC["SocketClient\njoin_room / draw_op / cursor_move"]
+        end
+
+        subgraph UISub["UI"]
+            CP["ColorPicker"]
+            BP["BrushPanel + BrushStorage"]
+            CuE["CurveEditor"]
+            RU["RoomUI"]
+        end
+    end
+
+    Browser -->|HTTP| Nginx
+    Nginx -->|proxy| NodeJS
+
+    AppTS --> CE
+    AppTS --> SC
+    AppTS --> CP
+    AppTS --> BP
+    AppTS --> CuE
+    AppTS --> RU
+    CE --> TM
+    TM --> WB
+    WB -. fallback .-> TSF
+    TM --> FF
+    TM --> SM
 ```
 
 ### ブラシエンジン
