@@ -36,21 +36,36 @@ Intel Mac（amd64）はデフォルト設定でそのまま動く。
 
 ---
 
-## 3. アプリの起動
+## 3. 環境変数の設定
 
 ```bash
 cd oekaki-chat-neo
-docker compose up --build
+cp .env.example .env
+```
+
+`.env` を開いて以下の 2 項目を設定する。
+
+| 変数 | 用途 |
+|------|------|
+| `POSTGRES_PASSWORD` | PostgreSQL のパスワード（任意の文字列） |
+| `DJANGO_SECRET_KEY` | Django の署名キー（任意の長い文字列） |
+
+---
+
+## 4. アプリの起動
+
+```bash
+docker compose up --build -d
 ```
 
 ブラウザで **http://localhost:8080** を開く。
 
-> 初回ビルドは npm install（frontend・backend 両方）が走るため数分かかる。  
+> 初回ビルドは pip install（backend）と npm install（frontend）が走るため数分かかる。  
 > 2 回目以降はキャッシュが効いて速い。
 
 ---
 
-## 4. 停止
+## 5. 停止
 
 ```bash
 # Ctrl+C でコンテナを止めた後
@@ -79,7 +94,11 @@ http://localhost:8080
 | コンテナ | 役割 | 公開ポート |
 |---------|------|-----------|
 | `frontend` | nginx + ビルド済み HTML/JS/CSS | 8080 |
-| `backend` | Node.js (Express + Socket.IO) | 3001（内部のみ） |
+| `backend` | Django + python-socketio (uvicorn) | 3001（内部のみ） |
+| `postgres` | PostgreSQL 16 | 5432（内部のみ） |
+
+PostgreSQL のデータは Docker named volume `pgdata` に保存される。  
+`docker compose down` してもデータは消えない。データごと削除したい場合は `--volumes` を付ける。
 
 ---
 
@@ -128,11 +147,17 @@ docker compose up --build
 docker compose up --build
 ```
 
-### コンテナ・イメージを完全に削除したい
+### コンテナ・イメージを完全に削除したい（DB データも消える）
 
 ```bash
 docker compose down --rmi all --volumes
 ```
+
+### backend コンテナが "waiting for PostgreSQL" のまま止まる
+
+PostgreSQL の起動より backend が先に立ち上がろうとした場合。  
+`docker compose up` を再実行するか、少し待ってから確認する。  
+ヘルスチェックにより通常は自動でリトライされる。
 
 ---
 
@@ -148,13 +173,23 @@ brew services start colima
 
 ## ローカル開発（Colima/Docker なし）
 
-Node.js 20 以上が入っていれば Docker 不要で動かせる。
+Python 3.12 以上と PostgreSQL が必要。
 
 ```bash
+# PostgreSQL に oekaki データベースと oekaki ユーザーを作成しておく
+
 # ターミナル 1 — バックエンド
 cd oekaki-chat-neo/backend
-npm install
-node src/server.js
+pip install -r requirements.txt
+
+export PGHOST=localhost
+export PGDATABASE=oekaki
+export PGUSER=oekaki
+export PGPASSWORD=your_password
+export DJANGO_SECRET_KEY=dev-secret-key
+
+python manage.py migrate
+uvicorn oekaki.asgi:application --host 0.0.0.0 --port 3001
 # → http://localhost:3001
 
 # ターミナル 2 — フロントエンド

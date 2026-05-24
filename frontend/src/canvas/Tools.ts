@@ -262,7 +262,7 @@ export class ToolManager {
     e.preventDefault();
     if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
       // Horizontal scroll (trackpad two-finger left/right) → pan
-      this.ctx.engine.pan(-e.deltaX, 0);
+      this.ctx.engine.panBy(-e.deltaX, 0);
     } else {
       // Vertical scroll → zoom centered on cursor
       const factor = e.deltaY < 0 ? 1.1 : 0.9;
@@ -420,7 +420,7 @@ export class ToolManager {
     const dy = e.clientY - this.panStartY;
     this.panStartX = e.clientX;
     this.panStartY = e.clientY;
-    this.ctx.engine.pan(dx, dy);
+    this.ctx.engine.panBy(dx, dy);
   }
 
   // ── Select ─────────────────────────────────────────────────────────────────

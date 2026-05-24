@@ -1,14 +1,42 @@
 version: '3.9'
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: oekaki
+      POSTGRES_USER: oekaki
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oekaki_secret}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - oekaki-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oekaki -d oekaki"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
     environment:
-      NODE_ENV: production
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-in-production}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost}
       PORT: "3001"
-      CORS_ORIGIN: "http://localhost:8080"
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: oekaki
+      PGUSER: oekaki
+      PGPASSWORD: ${POSTGRES_PASSWORD:-oekaki_secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - oekaki-net
@@ -24,6 +52,9 @@ services:
     restart: unless-stopped
     networks:
       - oekaki-net
+
+volumes:
+  pgdata:
 
 networks:
   oekaki-net:

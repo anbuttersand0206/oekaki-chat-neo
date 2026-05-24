@@ -1,15 +1,21 @@
 import {
-  BrushType, BrushConfig, ParamId, PARAM_IDS, PARAM_NAMES,
+  BrushType, BrushConfig, ParamId, PARAM_IDS, PARAM_NAMES, BRUSH_TYPES,
   defaultBrushConfig, defaultModifiers, isWetBrush
 } from '../types';
 import { CurveEditor } from './CurveEditor';
-import {
-  saveBrushCfg, loadBrushCfg,
-  saveActiveBrushType, loadActiveBrushType
-} from './BrushStorage';
+import { serializeAllConfigs, deserializeAllConfigs } from './BrushStorage';
 
+/**
+ * The BrushPanel manages the UI and state for all brush-related settings.
+ * It handles individual configurations for each brush type, manages parameter
+ * sliders and curve editors, and ensures settings are persisted to the server
+ * via debounced Socket.IO events.
+ */
 export class BrushPanel {
-  private cfg: BrushConfig = defaultBrushConfig('pen');
+  private allConfigs: Map<BrushType, BrushConfig> = new Map(
+    BRUSH_TYPES.map(t => [t, defaultBrushConfig(t)])
+  );
+  private cfg: BrushConfig = this.allConfigs.get('pen')!;
   private texture: ImageData | null = null;
 
   // Curve editors (one pressure + one speed per param, shown for selected param)
@@ -20,6 +26,7 @@ export class BrushPanel {
   private saveTimer: number | null = null;
 
   onChange?: () => void;
+  onSave?: (settings: Record<string, unknown>) => void;
 
   get brushConfig(): BrushConfig { return { ...this.cfg, modifiers: this.cfg.modifiers }; }
   get currentTexture(): ImageData | null { return this.texture; }
@@ -31,14 +38,26 @@ export class BrushPanel {
     this.syncSlider('bp-size', this.cfg.size);
     this.onChange?.();
     this.renderPreview();
+    this.debouncedSave();
+  }
+
+  // ── Restore brush settings received from server on room_joined ────────────────
+  restoreAllBrushConfigs(raw: Record<string, unknown>) {
+    const { activeType, configs } = deserializeAllConfigs(raw);
+    this.allConfigs = configs;
+    const type = (activeType && BRUSH_TYPES.includes(activeType as BrushType))
+      ? activeType as BrushType
+      : this.cfg.type;
+    this.cfg = this.allConfigs.get(type)!;
+    this.syncAllSliders();
+    this.updateWetVisibility();
+    this.updateCurveEditors();
+    this.onChange?.();
+    this.renderPreview();
   }
 
   // ── Init ──────────────────────────────────────────────────────────────────────
   init() {
-    // Restore last used brush type and its saved settings
-    const savedType = loadActiveBrushType();
-    if (savedType) this.cfg = loadBrushCfg(savedType);
-
     this.bindBrushTypeButtons();
     this.bindCommonSliders();
     this.bindWetSliders();
@@ -51,11 +70,11 @@ export class BrushPanel {
     this.renderPreview();
   }
 
-  // ── Deferred cookie save ───────────────────────────────────────────────────
+  // ── Deferred save to PostgreSQL via socket ────────────────────────────────
   private debouncedSave() {
     if (this.saveTimer !== null) clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => {
-      saveBrushCfg(this.cfg);
+      this.onSave?.(serializeAllConfigs(this.allConfigs, this.cfg.type));
       this.saveTimer = null;
     }, 400);
   }
@@ -66,18 +85,16 @@ export class BrushPanel {
       btn.addEventListener('click', () => {
         const t = btn.dataset.brushType as BrushType;
         if (t === this.cfg.type) return;
-        // Save current brush settings before switching
-        saveBrushCfg(this.cfg);
-        // Load saved settings for the new brush (or defaults)
+        this.allConfigs.set(this.cfg.type, this.cfg);
         document.querySelectorAll('[data-brush-type]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        this.cfg = loadBrushCfg(t);
-        saveActiveBrushType(t);
+        this.cfg = this.allConfigs.get(t)!;
         this.syncAllSliders();
         this.updateWetVisibility();
         this.updateCurveEditors();
         this.onChange?.();
         this.renderPreview();
+        this.debouncedSave();
       });
     });
   }
@@ -98,30 +115,30 @@ export class BrushPanel {
     this.bindSlider('bp-spread', v => { this.cfg.spread = v / 100; });
   }
 
-  private bindSlider(id: string, set: (v: number) => void) {
+  private bindSlider(id: string, onValueChange: (newValue: number) => void) {
     const slider = document.getElementById(id) as HTMLInputElement | null;
     const num    = document.getElementById(id + '-num') as HTMLInputElement | null;
     if (!slider) return;
     slider.addEventListener('input', () => {
       if (num) num.value = slider.value;
-      set(+slider.value);
+      onValueChange(+slider.value);
       this.onChange?.();
       this.debouncedSave();
       this.renderPreview();
     });
     num?.addEventListener('change', () => {
       slider.value = num.value;
-      set(+num.value);
+      onValueChange(+num.value);
       this.onChange?.();
       this.debouncedSave();
     });
   }
 
-  private syncSlider(id: string, val: number) {
+  private syncSlider(id: string, newValue: number) {
     const slider = document.getElementById(id) as HTMLInputElement | null;
     const num    = document.getElementById(id + '-num') as HTMLInputElement | null;
-    if (slider) slider.value = String(val);
-    if (num)    num.value    = String(val);
+    if (slider) slider.value = String(newValue);
+    if (num)    num.value    = String(newValue);
   }
 
   private syncAllSliders() {
@@ -252,10 +269,10 @@ export class BrushPanel {
     const ctx = preview.getContext('2d')!;
     ctx.clearRect(0, 0, preview.width, preview.height);
     if (this.texture) {
-      const tmp = document.createElement('canvas');
-      tmp.width = this.texture.width; tmp.height = this.texture.height;
-      tmp.getContext('2d')!.putImageData(this.texture, 0, 0);
-      ctx.drawImage(tmp, 0, 0, preview.width, preview.height);
+      const textureCanvas = document.createElement('canvas');
+      textureCanvas.width = this.texture.width; textureCanvas.height = this.texture.height;
+      textureCanvas.getContext('2d')!.putImageData(this.texture, 0, 0);
+      ctx.drawImage(textureCanvas, 0, 0, preview.width, preview.height);
     } else {
       ctx.fillStyle = document.documentElement.dataset.theme === 'light' ? '#d8d8e2' : '#2a2a32';
       ctx.fillRect(0, 0, preview.width, preview.height);

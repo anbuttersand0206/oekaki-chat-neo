@@ -5,8 +5,13 @@ import { ColorPicker } from './ui/ColorPicker';
 import { BrushPanel } from './ui/BrushPanel';
 import { RoomUI } from './ui/RoomUI';
 import { SocketClient } from './network/SocketClient';
-import { DrawOp, StrokeSettings, User, USER_COLORS, PARAM_IDS } from './types';
+import { DrawOp, StrokeSettings, User, USER_COLORS } from './types';
+import { escapeHtml } from './utils';
 
+/**
+ * The main entry point and orchestrator for the Oekaki Chat Neo application.
+ * Manages the interaction between the Canvas engine, UI components, and Socket connectivity.
+ */
 export class App {
   private engine!: CanvasEngine;
   private toolMgr = new ToolManager();
@@ -36,13 +41,22 @@ export class App {
     this.colorPicker.setRGB(0, 0, 0);
 
     this.roomUI.onCreateRoom = async (roomId, password, username) => {
-      const res = await fetch('/api/rooms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId, password })
-      });
-      const data = await res.json();
-      if (!res.ok) { this.roomUI.showError(data.error); return; }
+      let res: Response;
+      try {
+        res = await fetch('/api/rooms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId, password })
+        });
+      } catch {
+        this.roomUI.showError('サーバーに接続できませんでした');
+        return;
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        this.roomUI.showError(data.error ?? '部屋の作成に失敗しました');
+        return;
+      }
       this.connectRoom(roomId, password, username);
     };
 
@@ -93,12 +107,20 @@ export class App {
   }
 
   private setupSocket() {
-    this.socket.onRoomJoined = ({ roomId, userId, users, canvasState }) => {
+    this.brushPanel.onSave = (settings) => {
+      this.socket.emitBrushSettings(settings);
+    };
+
+    this.socket.onRoomJoined = ({ roomId, userId, users, canvasState, brushSettings, chatHistory }) => {
       this.userId = userId;
       this.roomId = roomId;
       this.users = users.map((u, i) => ({ ...u, color: USER_COLORS[i % USER_COLORS.length] }));
 
       this.showDrawScreen();
+
+      if (brushSettings) {
+        this.brushPanel.restoreAllBrushConfigs(brushSettings);
+      }
 
       if (canvasState) {
         this.engine.loadStateDataUrl(canvasState);
@@ -107,11 +129,21 @@ export class App {
       this.roomUI.setRoomInfo(roomId, users.length, 5);
       this.roomUI.updateUserList(this.users);
 
+      if (chatHistory) {
+        for (const msg of chatHistory) {
+          this.roomUI.addChatMessage(msg.username, msg.message, msg.userId === userId);
+        }
+      }
+
       this.startCanvasSync();
     };
 
     this.socket.onRoomError = ({ message }) => {
       this.roomUI.showError(message);
+    };
+
+    this.socket.onReconnectFailed = () => {
+      this.roomUI.showError('サーバーへの再接続に失敗しました。ページを再読み込みしてください。');
     };
 
     this.socket.onUserJoined = (user) => {
@@ -144,6 +176,7 @@ export class App {
     this.socket.onChatMessage = ({ userId, username, message }) => {
       const isSelf = userId === this.userId;
       this.roomUI.addChatMessage(username, message, isSelf);
+      if (!isSelf) this.showChatToast(username, message);
     };
   }
 
@@ -246,6 +279,8 @@ export class App {
     this.setupZoomPicker();
     initBrushWasm().then(ok => {
       document.getElementById('sb-engine')!.textContent = ok ? 'Wasm Engine' : 'JS Engine';
+    }).catch(() => {
+      document.getElementById('sb-engine')!.textContent = 'JS Engine';
     });
   }
 
@@ -254,17 +289,17 @@ export class App {
     const dropdown = document.getElementById('zoom-dropdown')!;
     const customInput = document.getElementById('zoom-custom-input') as HTMLInputElement;
 
-    const close = () => { dropdown.style.display = 'none'; };
+    const closeZoomDropdown = () => { dropdown.style.display = 'none'; };
 
     const applyZoom = (percent: number) => {
       this.engine?.setZoom(percent / 100);
-      close();
+      closeZoomDropdown();
     };
 
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const isOpen = dropdown.style.display !== 'none';
-      if (isOpen) { close(); return; }
+      if (isOpen) { closeZoomDropdown(); return; }
 
       // Highlight the closest preset to current zoom
       const cur = Math.round((this.engine?.currentZoom ?? 1) * 100);
@@ -275,7 +310,7 @@ export class App {
       dropdown.style.display = 'block';
     });
 
-    document.addEventListener('click', close);
+    document.addEventListener('click', closeZoomDropdown);
     dropdown.addEventListener('click', (e) => e.stopPropagation());
 
     dropdown.querySelectorAll<HTMLElement>('[data-zoom]').forEach(el => {
@@ -409,17 +444,31 @@ export class App {
     const input = document.getElementById('chat-input') as HTMLInputElement;
     const sendBtn = document.getElementById('chat-send-btn')!;
 
-    const send = () => {
+    const sendChatMessage = () => {
       const msg = input.value.trim();
       if (!msg) return;
       this.socket.emitChatMessage(msg);
       input.value = '';
     };
 
-    sendBtn.addEventListener('click', send);
+    sendBtn.addEventListener('click', sendChatMessage);
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+      // isComposing チェックで IME 変換中の Enter を送信に使わないようにする
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChatMessage(); }
     });
+  }
+
+  private showChatToast(username: string, message: string) {
+    const container = document.getElementById('chat-toast-container');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = 'chat-toast';
+    toast.innerHTML = `<div class="chat-toast-name">${escapeHtml(username)}</div><div class="chat-toast-msg">${escapeHtml(message)}</div>`;
+    container.appendChild(toast);
+    setTimeout(() => {
+      toast.classList.add('fade-out');
+      toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+    }, 3500);
   }
 
   private setupRightPanelToggle() {
@@ -550,7 +599,7 @@ export class App {
           <path d="M0 0 L0 16 L4 12 L7 18 L9 17 L6 11 L12 11 Z"
             fill="${color}" stroke="#000" stroke-width="1"/>
         </svg>
-        <span class="cursor-label" style="background:${color}">${username}</span>`;
+        <span class="cursor-label" style="background:${color}">${escapeHtml(username)}</span>`;
       container.appendChild(el);
     }
     el.style.left = `${cx}px`;

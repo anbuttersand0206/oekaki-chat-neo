@@ -1,7 +1,7 @@
-FROM node:20-alpine
+FROM python:3.12-slim
 WORKDIR /app
-COPY backend/package*.json ./
-RUN npm ci --omit=dev
-COPY backend/src ./src
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
+COPY backend/ .
 EXPOSE 3001
-CMD ["node", "src/server.js"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && uvicorn oekaki.asgi:application --host 0.0.0.0 --port ${PORT:-3001}"]

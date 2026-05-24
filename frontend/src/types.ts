@@ -1,3 +1,6 @@
+export const CANVAS_W = 1600;
+export const CANVAS_H = 1200;
+
 // ── Brush types ───────────────────────────────────────────────────────────────
 export type BrushType =
   | 'pen' | 'marker' | 'pencil' | 'crayon' | 'airbrush'
@@ -100,8 +103,8 @@ export function defaultBrushConfig(type: BrushType = 'pen'): BrushConfig {
     pencil:     { size: 5,  opacity: 0.8,  density: 0.7,  spacing: 0.06, hardness: 0.5  },
     crayon:     { size: 10, opacity: 0.9,  density: 0.8,  spacing: 0.08, hardness: 0.7  },
     airbrush:   { size: 40, opacity: 0.5,  density: 0.4,  spacing: 0.08, hardness: 0.0  },
-    watercolor: { size: 30, opacity: 1.0,  density: 1.0,  spacing: 0.05, hardness: 0.8,  mixing: 0.6, water: 0.8, spread: 0.4 },
-    oil:        { size: 20, opacity: 0.92, density: 0.85, spacing: 0.15, hardness: 0.65, mixing: 0.38, water: 0.35, spread: 0.48 },
+    watercolor: { size: 30, opacity: 1.0,  density: 0.8,  spacing: 0.05, hardness: 0.8,  mixing: 0.6, water: 0.8, spread: 0.4 },
+    oil:        { size: 20, opacity: 1.0, density: 1.0,  spacing: 0.10, hardness: 0.65, mixing: 0.50, water: 0.35, spread: 0.30 },
     pastel:     { size: 20, opacity: 0.7,  density: 0.6,  spacing: 0.1,  hardness: 0.6  },
     blur:       { size: 50, opacity: 0.6,  density: 0.6,  spacing: 0.2,  hardness: 0.0  },
   };

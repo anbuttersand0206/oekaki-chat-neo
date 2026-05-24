@@ -8,7 +8,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="/src/styles/main.css" />
-  <script>(function(){var t=localStorage.getItem('theme')||'dark';document.documentElement.dataset.theme=t;})()</script>
+  <script src="/theme-init.js"></script>
 </head>
 <body>
 
@@ -56,8 +56,8 @@
         <input type="text" id="create-room-id" placeholder="my-room" autocomplete="off" spellcheck="false"/>
       </div>
       <div class="field-group">
-        <label>パスワード</label>
-        <input type="password" id="create-password" placeholder="password"/>
+        <label>パスワード <span class="hint">8文字以上32文字以内</span></label>
+        <input type="password" id="create-password" placeholder="password" minlength="8" maxlength="32"/>
       </div>
       <div class="field-group">
         <label>ニックネーム</label>
@@ -465,16 +465,10 @@
 
 </div><!-- /draw-screen -->
 
+<div id="chat-toast-container"></div>
+
 <!-- Wasm brush engine — loaded if present, graceful fallback otherwise -->
-<script>
-  fetch('/brush_engine.wasm', {method:'HEAD'}).then(r => {
-    if (r.ok) {
-      const s = document.createElement('script');
-      s.src = '/brush_engine.js';
-      document.head.appendChild(s);
-    }
-  }).catch(() => {});
-</script>
+<script src="/wasm-loader.js"></script>
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

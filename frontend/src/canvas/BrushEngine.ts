@@ -3,22 +3,31 @@ import { evalCurve } from '../ui/CurveEditor';
 
 // ── Internal dab state ────────────────────────────────────────────────────────
 interface State {
-  prevX: number; prevY: number; prevP: number;
+  prevX: number;
+  prevY: number;
+  prevP: number;
+  dirX:  number;
+  dirY:  number;
   distAccum: number;
-  wetR: number; wetG: number; wetB: number; wetInit: boolean;
-  rng: number;
-  dirX: number; dirY: number;
+  wetInit:   boolean;
+  wetR: number;
+  wetG: number;
+  wetB: number;
+  rng:  number;
 }
 
 function mkState(): State {
-  return { prevX:0, prevY:0, prevP:0.5, distAccum:0,
-           wetR:255, wetG:255, wetB:255, wetInit:false, rng:0xDEADBEEF,
-           dirX:1, dirY:0 };
+  return {
+    prevX: 0, prevY: 0, prevP: 0,
+    dirX: 1, dirY: 0, distAccum: 0,
+    wetInit: false, wetR: 0, wetG: 0, wetB: 0,
+    rng: Math.floor(Math.random() * 0xFFFFFFFF)
+  };
 }
 
 function nextRng(s: State): number {
-  s.rng = Math.imul(s.rng, 1664525) + 1013904223 | 0;
-  return ((s.rng >>> 1) / 0x40000000) * 2 - 1;
+  s.rng = Math.imul(48271, s.rng) | 0;
+  return (s.rng & 0x7fffffff) / 0x7fffffff * 2 - 1;
 }
 
 function resolveParam(s: State, pid: ParamId, base: number, pressure: number, normSpeed: number,
@@ -35,51 +44,53 @@ function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function softAlpha(d: number, hardness: number): number {
   if (d >= 1) return 0;
   if (hardness >= 1 || d <= hardness) return 1;
-  const t = (d - hardness) / (1 - hardness);
-  return Math.exp(-4 * t * t); // Gaussian falloff
+  let t = (d - hardness) / (1 - hardness + 1e-7);
+  t = t * t * t * (t * (t * 6 - 15) + 10); // quintic smoothstep
+  return 1 - t;
 }
 
-function paperNoise(cx: number, cy: number): number {
-  let h = (Math.imul(cx, 2654435761) ^ Math.imul(cy, 2246822519)) >>> 0;
-  h ^= h >>> 16; h = Math.imul(h, 0x45d9f3b) >>> 0; h ^= h >>> 16;
-  let h2 = (Math.imul((cx>>1), 2654435761) ^ Math.imul((cy>>1), 2246822519)) >>> 0;
-  h2 ^= h2 >>> 16; h2 = Math.imul(h2, 0x45d9f3b) >>> 0; h2 ^= h2 >>> 16;
-  return ((h & 0xFF) / 255 * 0.6) + ((h2 & 0xFF) / 255 * 0.4);
+function paperNoise(x: number, y: number): number {
+  const h = Math.imul(x, 2654435761) ^ Math.imul(y, 2246822519);
+  const h2 = (h ^ (h >>> 16));
+  const h3 = Math.imul(h2, 0x45d9f3b);
+  const final = (h3 ^ (h3 >>> 16)) & 0xFF;
+  return final / 255;
 }
 
-function texSample(tex: ImageData, cx: number, cy: number): number {
-  const tx = ((cx % tex.width)  + tex.width)  % tex.width  | 0;
-  const ty = ((cy % tex.height) + tex.height) % tex.height | 0;
-  const i = (ty * tex.width + tx) * 4;
-  return (tex.data[i]*0.299 + tex.data[i+1]*0.587 + tex.data[i+2]*0.114) / 255;
-}
-
-// ── BrushEngine class ─────────────────────────────────────────────────────────
-
+/**
+ * The BrushEngine is the TypeScript fallback drawing implementation.
+ * Opacity applies to the whole stroke: all dabs accumulate into strokeBuf at full
+ * density, then strokeBuf is composited against preStrokeImg with opa as the
+ * stroke-level alpha multiplier. Density controls per-dab alpha independently.
+ */
 export class BrushEngine {
   private state: State = mkState();
-
-  // ── Per-stroke snapshot + per-pixel max-alpha buffer ──────────────────────────
   private preStrokeImg: ImageData | null = null;
-  private strokeAlphaBuf: Float32Array | null = null;
+  private strokeBuf: Uint8ClampedArray | null = null;   // accumulated dabs, transparent bg
+  private strokeAlphaBuf: Float32Array | null = null;   // for blur anti-overdraw
 
   constructor(private ctx: CanvasRenderingContext2D) {}
 
-  dispose() {}  // no-op — for interface parity with WasmBrushEngine
+  dispose() {}
 
-  beginStroke(x: number, y: number, pressure: number, _speed: number, s: StrokeSettings) {
+  beginStroke(x: number, y: number, pressure: number, speed: number, s: StrokeSettings) {
     this.state = mkState();
     this.state.prevX = x; this.state.prevY = y; this.state.prevP = pressure;
-
     const CW = this.ctx.canvas.width, CH = this.ctx.canvas.height;
     this.preStrokeImg = this.ctx.getImageData(0, 0, CW, CH);
+    const len4 = CW * CH * 4;
+    if (!this.strokeBuf || this.strokeBuf.length !== len4) {
+      this.strokeBuf = new Uint8ClampedArray(len4);
+    } else {
+      this.strokeBuf.fill(0);
+    }
     const len = CW * CH;
     if (!this.strokeAlphaBuf || this.strokeAlphaBuf.length !== len) {
       this.strokeAlphaBuf = new Float32Array(len);
     } else {
       this.strokeAlphaBuf.fill(0);
     }
-    this.putDab(x, y, pressure, 0, s);
+    this.putDab(x, y, pressure, speed, s);
   }
 
   strokeTo(x: number, y: number, pressure: number, speed: number, s: StrokeSettings) {
@@ -87,493 +98,280 @@ export class BrushEngine {
     const dy = y - this.state.prevY;
     const dist = Math.hypot(dx, dy);
     if (dist < 0.5) return;
-
-    this.state.dirX = dx / dist;
-    this.state.dirY = dy / dist;
-
-    const ns  = clamp01(speed / 1000);
-    const sz  = Math.max(0.01, resolveParam(this.state, 'size',    s.brushConfig.size,    pressure, ns, s.brushConfig));
-    const spc = Math.max(0.01, resolveParam(this.state, 'spacing', s.brushConfig.spacing, pressure, ns, s.brushConfig));
-    const spacing = Math.max(1, spc * sz);
-
+    this.state.dirX = dx / dist; this.state.dirY = dy / dist;
+    const ns = clamp01(speed / 1000);
+    const cfg = s.brushConfig;
+    const szEnd = Math.max(0.01, resolveParam(this.state, 'size', cfg.size, pressure, ns, cfg));
+    const spc = Math.max(0.01, resolveParam(this.state, 'spacing', cfg.spacing, pressure, ns, cfg));
+    const spacing = Math.max(1, spc * szEnd);
     const steps = Math.ceil(dist / spacing);
     const leftover = spacing - (this.state.distAccum % spacing);
     const startFrac = leftover / dist;
-
     for (let i = 0; i < steps; i++) {
       const t = startFrac + (i / steps) * (1 - startFrac);
       if (t > 1) break;
-      const cx = this.state.prevX + dx * t;
-      const cy = this.state.prevY + dy * t;
       const cp = this.state.prevP + (pressure - this.state.prevP) * t;
-      this.putDab(cx, cy, cp, speed, s);
+      this.putDab(this.state.prevX + dx * t, this.state.prevY + dy * t, cp, speed, s);
     }
-
-    this.state.distAccum += dist;
-    this.state.prevX = x; this.state.prevY = y; this.state.prevP = pressure;
+    this.state.distAccum += dist; this.state.prevX = x; this.state.prevY = y; this.state.prevP = pressure;
   }
 
-  // ── Dab dispatch ────────────────────────────────────────────────────────────
-
-  private putDab(cx: number, cy: number, pressure: number, speed: number, s: StrokeSettings) {
-    const ns    = clamp01(speed / 1000);
-    const cfg   = s.brushConfig;
-    const szRaw = Math.max(0.01, resolveParam(this.state, 'size',    cfg.size,    pressure, ns, cfg));
-    const opa   = clamp01(       resolveParam(this.state, 'opacity', cfg.opacity, pressure, ns, cfg));
-    const den   = clamp01(       resolveParam(this.state, 'density', cfg.density, pressure, ns, cfg));
-    const coverage = Math.min(1.0, szRaw);
-    const rad   = Math.max(1.0, szRaw) * 0.5;
-    const alpha = opa * den * coverage;
-
+  private putDab(cx: number, cy: number, cp: number, speed: number, s: StrokeSettings) {
+    const ns = clamp01(speed / 1000);
+    const cfg = s.brushConfig;
+    const sz = Math.max(0.01, resolveParam(this.state, 'size', cfg.size, cp, ns, cfg));
+    const opa = clamp01(resolveParam(this.state, 'opacity', cfg.opacity, cp, ns, cfg));
+    const den = clamp01(resolveParam(this.state, 'density', cfg.density, cp, ns, cfg));
+    const rad = Math.max(1, sz) * 0.5;
+    const flow = den * (sz < 1 ? sz : 1);
     switch (cfg.type) {
-      case 'pen':        this.dabPen       (cx, cy, rad, alpha, s); break;
-      case 'marker':     this.dabMarker    (cx, cy, rad, alpha, s); break;
-      case 'pencil':     this.dabPencil    (cx, cy, rad, alpha, s); break;
-      case 'crayon':     this.dabCrayon    (cx, cy, rad, alpha, s); break;
-      case 'airbrush':   this.dabAirbrush  (cx, cy, rad, alpha, s); break;
-      case 'watercolor': this.dabWatercolor(cx, cy, rad, alpha, s); break;
-      case 'oil':        this.dabOil       (cx, cy, rad, alpha, s); break;
-      case 'pastel':     this.dabPastel    (cx, cy, rad, alpha, s); break;
-      case 'blur':       this.dabBlur      (cx, cy, rad, alpha, s); break;
+      case 'pen':        this.dabPen       (cx, cy, rad, flow, opa, s); break;
+      case 'marker':     this.dabMarker    (cx, cy, rad, flow, opa, s); break;
+      case 'pencil':     this.dabPencil    (cx, cy, rad, flow, opa, s); break;
+      case 'crayon':     this.dabCrayon    (cx, cy, rad, flow, opa, s); break;
+      case 'airbrush':   this.dabAirbrush  (cx, cy, rad, flow, opa, s); break;
+      case 'watercolor': this.dabWatercolor(cx, cy, rad, flow, opa, s); break;
+      case 'oil':        this.dabOil       (cx, cy, rad, flow, opa, s); break;
+      case 'pastel':     this.dabPastel    (cx, cy, rad, flow, opa, s); break;
+      case 'blur':       this.dabBlur      (cx, cy, rad, flow * opa, s); break;
     }
   }
 
-  // ── Per-type dabs ────────────────────────────────────────────────────────────
+  // Blend (r,g,b,a) into a strokeBuf patch using Porter-Duff over. r/g/b are 0-255.
+  private blendPxBuf(sb: Uint8ClampedArray, pw: number, ph: number, lx: number, ly: number,
+                     r: number, g: number, b: number, a: number) {
+    if (lx < 0 || ly < 0 || lx >= pw || ly >= ph) return;
+    const i = (ly * pw + lx) * 4;
+    const da = sb[i+3] / 255, sa = a;
+    const outA = sa + da * (1 - sa);
+    if (outA < 1e-5) return;
+    const inv = 1 / outA;
+    sb[i]   = (r * sa + sb[i]   * da * (1 - sa)) * inv;
+    sb[i+1] = (g * sa + sb[i+1] * da * (1 - sa)) * inv;
+    sb[i+2] = (b * sa + sb[i+2] * da * (1 - sa)) * inv;
+    sb[i+3] = outA * 255;
+  }
 
-  private patchDab(cx: number, cy: number, rad: number,
-                   extra: number, s: StrokeSettings,
-                   fn: (img: ImageData, ox: number, oy: number) => void) {
-    const CCTX = this.ctx;
-    const CW = CCTX.canvas.width, CH = CCTX.canvas.height;
+  // Direct canvas read/write patch — for eraser and blur.
+  private patchDabDirect(cx: number, cy: number, rad: number, extra: number,
+      fn: (img: ImageData, ox: number, oy: number) => void) {
+    const CW = this.ctx.canvas.width, CH = this.ctx.canvas.height, r = Math.ceil(rad + extra + 1);
+    const x0 = Math.max(0, Math.floor(cx - r)), y0 = Math.max(0, Math.floor(cy - r));
+    const x1 = Math.min(CW, Math.ceil(cx + r)), y1 = Math.min(CH, Math.ceil(cy + r));
+    const pw = x1 - x0, ph = y1 - y0; if (pw <= 0 || ph <= 0) return;
+    const img = this.ctx.getImageData(x0, y0, pw, ph); fn(img, x0, y0); this.ctx.putImageData(img, x0, y0);
+  }
+
+  // strokeBuf patch — accumulates dab into strokeBuf, then composites to canvas.
+  // fn receives: (strokeBuf patch, pw, ph, current visible canvas patch, ox, oy)
+  private patchDab(cx: number, cy: number, rad: number, extra: number, opa: number,
+      fn: (sbData: Uint8ClampedArray, pw: number, ph: number, visData: Uint8ClampedArray, ox: number, oy: number) => void) {
+    const CW = this.ctx.canvas.width, CH = this.ctx.canvas.height;
     const r = Math.ceil(rad + extra + 1);
-    const x0 = Math.max(0, Math.floor(cx - r));
-    const y0 = Math.max(0, Math.floor(cy - r));
-    const x1 = Math.min(CW, Math.ceil(cx + r));
-    const y1 = Math.min(CH, Math.ceil(cy + r));
+    const x0 = Math.max(0, Math.floor(cx - r)), y0 = Math.max(0, Math.floor(cy - r));
+    const x1 = Math.min(CW, Math.ceil(cx + r)), y1 = Math.min(CH, Math.ceil(cy + r));
     const pw = x1 - x0, ph = y1 - y0;
     if (pw <= 0 || ph <= 0) return;
-    const img = CCTX.getImageData(x0, y0, pw, ph);
-    fn(img, x0, y0);
-    CCTX.putImageData(img, x0, y0);
-  }
 
-  private blendPx(d: Uint8ClampedArray, pw: number, ph: number,
-                  lx: number, ly: number,
-                  r: number, g: number, b: number, alpha: number, eraser: boolean) {
-    if (lx < 0 || ly < 0 || lx >= pw || ly >= ph) return;
-    if (alpha <= 0.003) return;
-    alpha = clamp01(alpha);
-    const idx = (ly * pw + lx) * 4;
-    if (eraser) {
-      d[idx+3] = Math.round(Math.max(0, d[idx+3] * (1 - alpha)));
-      return;
-    }
-    const da = d[idx+3] / 255;
-    const sa = alpha;
-    const outA = sa + da * (1 - sa);
-    if (outA < 1e-5) { d[idx+3] = 0; return; }
-    const inv = 1 / outA;
-    d[idx+0] = (r * sa + d[idx+0] * da * (1 - sa)) * inv;
-    d[idx+1] = (g * sa + d[idx+1] * da * (1 - sa)) * inv;
-    d[idx+2] = (b * sa + d[idx+2] * da * (1 - sa)) * inv;
-    d[idx+3] = outA * 255;
-  }
-
-  // Max-alpha variant: only writes if new alpha exceeds the per-pixel maximum seen
-  // so far this stroke; always composites against the pre-stroke snapshot.
-  private blendPxBuf(d: Uint8ClampedArray, pw: number, ph: number,
-                     lx: number, ly: number, ox: number, oy: number,
-                     r: number, g: number, b: number, alpha: number, eraser: boolean) {
-    if (lx < 0 || ly < 0 || lx >= pw || ly >= ph) return;
-    if (alpha <= 0.003) return;
-    alpha = clamp01(alpha);
-
-    const pre  = this.preStrokeImg;
-    const abuf = this.strokeAlphaBuf;
-    if (!pre || !abuf) {
-      this.blendPx(d, pw, ph, lx, ly, r, g, b, alpha, eraser);
-      return;
+    const visImg = this.ctx.getImageData(x0, y0, pw, ph);
+    const sb = this.strokeBuf!;
+    const sbPatch = new Uint8ClampedArray(pw * ph * 4);
+    for (let py = 0; py < ph; py++) {
+      const srcOff = ((y0 + py) * CW + x0) * 4;
+      sbPatch.set(sb.subarray(srcOff, srcOff + pw * 4), py * pw * 4);
     }
 
-    const CW = this.ctx.canvas.width;
-    const gx = lx + ox, gy = ly + oy;
-    const bi = gy * CW + gx;
-    if (alpha <= abuf[bi]) return; // already painted at higher alpha — skip
-    abuf[bi] = alpha;
+    fn(sbPatch, pw, ph, visImg.data, x0, y0);
 
-    const pi = bi * 4;
-    const li = (ly * pw + lx) * 4;
+    for (let py = 0; py < ph; py++) {
+      sb.set(sbPatch.subarray(py * pw * 4, (py + 1) * pw * 4), ((y0 + py) * CW + x0) * 4);
+    }
 
-    if (eraser) {
-      d[li+0] = pre.data[pi+0];
-      d[li+1] = pre.data[pi+1];
-      d[li+2] = pre.data[pi+2];
-      d[li+3] = Math.round(Math.max(0, pre.data[pi+3] * (1 - alpha)));
-    } else {
-      const da = pre.data[pi+3] / 255;
-      const sa = alpha;
-      const outA = sa + da * (1 - sa);
-      if (outA < 1e-5) { d[li+3] = 0; return; }
+    const pre = this.preStrokeImg!;
+    const outImg = new ImageData(pw, ph);
+    for (let py = 0; py < ph; py++) for (let px = 0; px < pw; px++) {
+      const li = (py * pw + px) * 4;
+      const gi = ((y0 + py) * CW + x0 + px) * 4;
+      const sbA = sbPatch[li + 3] / 255 * opa;
+      const preA = pre.data[gi + 3] / 255;
+      const outA = sbA + preA * (1 - sbA);
+      if (outA < 1e-5) { outImg.data[li + 3] = 0; continue; }
       const inv = 1 / outA;
-      d[li+0] = (r * sa + pre.data[pi+0] * da * (1-sa)) * inv;
-      d[li+1] = (g * sa + pre.data[pi+1] * da * (1-sa)) * inv;
-      d[li+2] = (b * sa + pre.data[pi+2] * da * (1-sa)) * inv;
-      d[li+3] = outA * 255;
+      outImg.data[li]     = (sbPatch[li]     / 255 * sbA + pre.data[gi]     / 255 * preA * (1 - sbA)) * inv * 255;
+      outImg.data[li + 1] = (sbPatch[li + 1] / 255 * sbA + pre.data[gi + 1] / 255 * preA * (1 - sbA)) * inv * 255;
+      outImg.data[li + 2] = (sbPatch[li + 2] / 255 * sbA + pre.data[gi + 2] / 255 * preA * (1 - sbA)) * inv * 255;
+      outImg.data[li + 3] = outA * 255;
     }
+    this.ctx.putImageData(outImg, x0, y0);
   }
 
-  // aa=1 for interior pixels; linearly fades 1→0 over the outer 0.5px ring (sub-pixel AA)
-  private iterCircle(cx: number, cy: number, rad: number, ox: number, oy: number,
-                     pw: number, ph: number,
-                     fn: (lx: number, ly: number, d: number, aa: number) => void) {
-    const x0 = Math.max(0, Math.floor(cx - ox - rad - 1)) | 0;
-    const y0 = Math.max(0, Math.floor(cy - oy - rad - 1)) | 0;
-    const x1 = Math.min(pw - 1, Math.ceil(cx - ox + rad + 1)) | 0;
-    const y1 = Math.min(ph - 1, Math.ceil(cy - oy + rad + 1)) | 0;
-    const r2 = rad * rad;
-    const outer = rad + 0.5;
-    const outerR2 = outer * outer;
-    for (let ly = y0; ly <= y1; ly++) {
-      for (let lx = x0; lx <= x1; lx++) {
-        const dx = (lx + ox) - cx;
-        const dy = (ly + oy) - cy;
-        const d2 = dx*dx + dy*dy;
-        if (d2 > outerR2) continue;
-        const dist = Math.sqrt(d2);
-        // Linear coverage: 1.0 inside radius, fades to 0 at radius+0.5
-        const aa = d2 > r2 ? Math.max(0, outer - dist) * 2 : 1;
-        fn(lx, ly, dist / rad, aa);
+  private iterCircleDab(cx: number, cy: number, rad: number, ox: number, oy: number, pw: number, ph: number, hardness: number, fn: (lx: number, ly: number, a: number) => void) {
+    const N = rad < 3 ? 11 : rad < 15 ? 5 : 3, invN = 1 / N, invNN = 1 / (N * N), rr = rad * rad, iR = rad * hardness, iRR = iR * iR, eW = rad - iR + 1e-6;
+    const x0 = Math.max(0, Math.floor(cx - ox - rad)) | 0, y0 = Math.max(0, Math.floor(cy - oy - rad)) | 0, x1 = Math.min(pw - 1, Math.ceil(cx - ox + rad)) | 0, y1 = Math.min(ph - 1, Math.ceil(cy - oy + rad)) | 0;
+    for (let ly = y0; ly <= y1; ly++) for (let lx = x0; lx <= x1; lx++) {
+      let sum = 0;
+      for (let iy = 0; iy < N; iy++) {
+        const py = ly + oy + (iy + 0.5) * invN, dy2 = (py - cy) * (py - cy); if (dy2 >= rr) continue;
+        for (let ix = 0; ix < N; ix++) {
+          const px = lx + ox + (ix + 0.5) * invN, d2 = (px - cx) * (px - cx) + dy2; if (d2 >= rr) continue;
+          if (d2 <= iRR) sum += 1; else { const s = Math.min(1, (Math.sqrt(d2) - iR) / eW); sum += 1 - s * s * (3 - 2 * s); }
+        }
       }
+      if (sum > 0) fn(lx, ly, sum * invNN);
     }
   }
 
-  // N×N oversampled circle with two-zone hardness.
-  // Zone 1 — inner core (d <= hardness*r): full coverage.
-  // Zone 2 — outer edge (hardness*r < d < r): cubic smoothstep falloff.
-  //   s = (d - innerR) / (r - innerR),  coverage = 1 - s²(3 - 2s)
-  private iterCircleDab(
-    cx: number, cy: number, rad: number,
-    ox: number, oy: number, pw: number, ph: number,
-    hardness: number,
-    fn: (lx: number, ly: number, alpha: number) => void
-  ): void {
-    const N      = rad < 3 ? 11 : rad < 15 ? 5 : 3;
-    const rr     = rad * rad;
-    const isHard = hardness >= 0.999;
-    const innerR = rad * hardness;
-    const innerRR= innerR * innerR;
-    const edgeW  = rad - innerR + 1e-6;
-
-    const x0 = Math.max(0, Math.floor(cx - ox - rad)) | 0;
-    const y0 = Math.max(0, Math.floor(cy - oy - rad)) | 0;
-    const x1 = Math.min(pw - 1, Math.ceil(cx - ox + rad)) | 0;
-    const y1 = Math.min(ph - 1, Math.ceil(cy - oy + rad)) | 0;
-
-    const invN  = 1 / N;
-    const invNN = 1 / (N * N);
-
-    for (let ly = y0; ly <= y1; ly++) {
-      for (let lx = x0; lx <= x1; lx++) {
-        let sum = 0;
-        for (let iy = 0; iy < N; iy++) {
-          const py  = ly + oy + (iy + 0.5) * invN;
-          const dy2 = (py - cy) * (py - cy);
-          if (dy2 >= rr) continue;
-          for (let ix = 0; ix < N; ix++) {
-            const px = lx + ox + (ix + 0.5) * invN;
-            const d2 = (px - cx) * (px - cx) + dy2;
-            if (d2 >= rr) continue;
-            if (isHard || d2 <= innerRR) {
-              sum += 1;
-            } else {
-              const s = Math.min(1, (Math.sqrt(d2) - innerR) / edgeW);
-              sum += 1 - s * s * (3 - 2 * s); // cubic smoothstep
-            }
-          }
-        }
-        if (sum > 0) fn(lx, ly, sum * invNN);
-      }
-    }
+  private avgColor(d: Uint8ClampedArray, pw: number, ph: number, cx: number, cy: number, rad: number, ox: number, oy: number): [number, number, number] {
+    const sr = Math.max(1, rad * 0.4 | 0), x0 = Math.max(0, (cx - ox - sr) | 0), y0 = Math.max(0, (cy - oy - sr) | 0), x1 = Math.min(pw - 1, (cx - ox + sr) | 0), y1 = Math.min(ph - 1, (cy - oy + sr) | 0);
+    let r = 0, g = 0, b = 0, c = 0; for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const i = (y * pw + x) * 4; r += d[i]; g += d[i+1]; b += d[i+2]; c++; }
+    return c ? [r/c, g/c, b/c] : [255, 255, 255];
   }
 
-  private avgColor(d: Uint8ClampedArray, pw: number, ph: number,
-                   cx: number, cy: number, rad: number, ox: number, oy: number) {
-    const sr = Math.max(1, rad * 0.4 | 0);
-    const x0 = Math.max(0, (cx - ox - sr) | 0);
-    const y0 = Math.max(0, (cy - oy - sr) | 0);
-    const x1 = Math.min(pw-1, (cx - ox + sr) | 0);
-    const y1 = Math.min(ph-1, (cy - oy + sr) | 0);
-    let rr=0, gg=0, bb=0, cnt=0;
-    for (let y=y0; y<=y1; y++) for (let x=x0; x<=x1; x++) {
-      const i = (y*pw+x)*4; rr+=d[i]; gg+=d[i+1]; bb+=d[i+2]; cnt++;
-    }
-    return cnt ? [rr/cnt, gg/cnt, bb/cnt] : [255,255,255];
-  }
-
-  // Reads average colour from a full-canvas ImageData (global pixel coordinates)
-  private avgColorGlobal(src: ImageData, cx: number, cy: number, rad: number): [number, number, number] {
-    const CW = src.width, CH = src.height;
-    const sr = Math.max(1, rad * 0.4 | 0);
-    const x0 = Math.max(0, (cx - sr) | 0);
-    const y0 = Math.max(0, (cy - sr) | 0);
-    const x1 = Math.min(CW - 1, (cx + sr) | 0);
-    const y1 = Math.min(CH - 1, (cy + sr) | 0);
-    let r = 0, g = 0, b = 0, cnt = 0;
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const i = (y * CW + x) * 4; r += src.data[i]; g += src.data[i+1]; b += src.data[i+2]; cnt++;
-    }
-    return cnt ? [r/cnt, g/cnt, b/cnt] : [255, 255, 255];
-  }
-
-  // ── Pen ──────────────────────────────────────────────────────────────────────
-  private dabPen(cx: number, cy: number, rad: number, opa: number, s: StrokeSettings) {
-    const { hardness } = s.brushConfig;
-    const [r, g, b] = s.color;
-    this.patchDab(cx, cy, rad, 0, s, (img, ox, oy) => {
-      this.iterCircleDab(cx, cy, rad, ox, oy, img.width, img.height, hardness, (lx, ly, alpha) => {
-        const a = alpha * opa;
-        if (a <= 0.003) return;
-        this.blendPxBuf(img.data, img.width, img.height, lx, ly, ox, oy, r, g, b, a, s.eraser);
-      });
-    });
-  }
-
-  // ── Marker ──────────────────────────────────────────────────────────────────
-  private dabMarker(cx: number, cy: number, rad: number, opa: number, s: StrokeSettings) {
-    const [r, g, b] = s.color;
-    const { hardness } = s.brushConfig;
-    this.patchDab(cx, cy, rad, 0, s, (img, ox, oy) => {
-      this.iterCircleDab(cx, cy, rad, ox, oy, img.width, img.height, hardness, (lx, ly, alpha) => {
-        this.blendPxBuf(img.data, img.width, img.height, lx, ly, ox, oy,
-                        r, g, b, alpha * opa * 0.85, s.eraser);
-      });
-    });
-  }
-
-  // ── Pencil ──────────────────────────────────────────────────────────────────
-  private dabPencil(cx: number, cy: number, rad: number, opa: number, s: StrokeSettings) {
-    this.patchDab(cx, cy, rad, 0, s, (img, ox, oy) => {
-      const [r,g,b] = s.color;
-      const { hardness } = s.brushConfig;
-      this.iterCircle(cx, cy, rad, ox, oy, img.width, img.height, (lx, ly, d, aa) => {
-        const grain = s.texture
-          ? texSample(s.texture, lx+ox, ly+oy)
-          : paperNoise(lx+ox, ly+oy);
-        const a = softAlpha(d, hardness) * (grain * 0.8 + 0.2) * opa * aa;
-        this.blendPxBuf(img.data, img.width, img.height, lx, ly, ox, oy, r, g, b, a, s.eraser);
-      });
-    });
-  }
-
-  // ── Crayon ──────────────────────────────────────────────────────────────────
-  private dabCrayon(cx: number, cy: number, rad: number, opa: number, s: StrokeSettings) {
-    this.patchDab(cx, cy, rad, 0, s, (img, ox, oy) => {
-      const [r,g,b] = s.color;
-      const { hardness } = s.brushConfig;
-      const pre = this.preStrokeImg;
-      const CW  = this.ctx.canvas.width;
-      this.iterCircle(cx, cy, rad, ox, oy, img.width, img.height, (lx, ly, d, aa) => {
-        const grain = s.texture
-          ? texSample(s.texture, lx+ox, ly+oy)
-          : paperNoise(lx+ox, ly+oy);
-        const a = softAlpha(d, hardness) * (grain * grain) * opa * aa;
-        if (a < 0.005) return;
-        // Read wax base color from pre-stroke snapshot (avoids false tinting from accumulated dabs)
-        const wax = 0.3;
-        let fr, fg, fb;
-        if (pre) {
-          const pi = ((ly + oy) * CW + (lx + ox)) * 4;
-          fr = lerp(r, pre.data[pi],   wax);
-          fg = lerp(g, pre.data[pi+1], wax);
-          fb = lerp(b, pre.data[pi+2], wax);
-        } else {
-          const idx = (ly * img.width + lx) * 4;
-          fr = lerp(r, img.data[idx],   wax);
-          fg = lerp(g, img.data[idx+1], wax);
-          fb = lerp(b, img.data[idx+2], wax);
-        }
-        this.blendPxBuf(img.data, img.width, img.height, lx, ly, ox, oy, fr, fg, fb, a, false);
-      });
-    });
-  }
-
-  // ── Airbrush ─────────────────────────────────────────────────────────────────
-  // Gaussian falloff with optional core. coreRad = rad * hardness.
-  private dabAirbrush(cx: number, cy: number, rad: number, opa: number, s: StrokeSettings) {
-    const [r, g, b] = s.color;
-    const coreRad  = rad * s.brushConfig.hardness;
-    const sigma    = Math.max(1, (rad - coreRad) * 0.6);
-    const totalRad = coreRad + sigma * 3;
-
-    this.patchDab(cx, cy, totalRad, 0, s, (img, ox, oy) => {
-      this.iterCircle(cx, cy, totalRad, ox, oy, img.width, img.height, (lx, ly, d, aa) => {
-        const distPx = d * totalRad; 
-        const alpha = (distPx <= coreRad
-          ? opa
-          : Math.exp(-0.5 * ((distPx - coreRad) / sigma) ** 2) * opa
-        ) * aa;
-        if (alpha <= 0.003) return;
-        this.blendPxBuf(img.data, img.width, img.height, lx, ly, ox, oy, r, g, b, alpha, s.eraser);
-      });
-    });
-  }
-
-  // ── Watercolor ───────────────────────────────────────────────────────────────
-  private dabWatercolor(cx: number, cy: number, rad: number, opa: number, s: StrokeSettings) {
-    const water = s.brushConfig.water;
-    const flow  = water * opa * 0.55;
-
-    this.patchDab(cx, cy, rad, 0, s, (img, ox, oy) => {
-      const pre = this.preStrokeImg;
-      const [avgR, avgG, avgB] = pre
-        ? this.avgColorGlobal(pre, cx, cy, rad * 0.6)
-        : this.avgColor(img.data, img.width, img.height, cx, cy, rad, ox, oy);
-      const st = this.state;
-      if (!st.wetInit) { st.wetR=avgR; st.wetG=avgG; st.wetB=avgB; st.wetInit=true; }
-
-      const sp = s.brushConfig.spread;
-      const mx = s.brushConfig.mixing;
-      st.wetR = lerp(avgR, st.wetR, sp * 0.5); st.wetR = lerp(st.wetR, s.color[0], mx * 0.7);
-      st.wetG = lerp(avgG, st.wetG, sp * 0.5); st.wetG = lerp(st.wetG, s.color[1], mx * 0.7);
-      st.wetB = lerp(avgB, st.wetB, sp * 0.5); st.wetB = lerp(st.wetB, s.color[2], mx * 0.7);
-
-      this.iterCircle(cx, cy, rad, ox, oy, img.width, img.height, (lx, ly, normInner, aa) => {
-        const g   = Math.exp(-3 * normInner * normInner);
-        const rim = Math.exp(-30 * (normInner - 0.7) ** 2) * 0.35;
-
-        // Sharper edge cutoff to remove "haze"
-        const edge = clamp01((1 - normInner) * 10);
-        let a = (g + rim) * flow * edge;
-
-        if (s.texture) a *= texSample(s.texture, lx+ox, ly+oy) * 0.35 + 0.65;
-        if (a > 0.003) {
-          this.blendPxBuf(img.data, img.width, img.height, lx, ly, ox, oy,
-                          st.wetR, st.wetG, st.wetB, a * aa, false);
-        }
-      });
-    });
-  }
-
-  // ── Oil ── round tip, wet color mixing ────────────────────────────────────────
-  private dabOil(cx: number, cy: number, rad: number, opa: number, s: StrokeSettings) {
-    const cfg = s.brushConfig;
-    const sp = cfg.spread, mx = cfg.mixing;
-
-    this.patchDab(cx, cy, rad, 0, s, (img, ox, oy) => {
-      const pre = this.preStrokeImg;
-      const [avgR, avgG, avgB] = pre
-        ? this.avgColorGlobal(pre, cx, cy, rad * 0.35)
-        : this.avgColor(img.data, img.width, img.height, cx, cy, rad * 0.35, ox, oy);
-      const st = this.state;
-      if (!st.wetInit) { st.wetR=s.color[0]; st.wetG=s.color[1]; st.wetB=s.color[2]; st.wetInit=true; }
-
-      st.wetR = lerp(lerp(st.wetR, avgR, sp * 0.45), s.color[0], mx * 0.55);
-      st.wetG = lerp(lerp(st.wetG, avgG, sp * 0.45), s.color[1], mx * 0.55);
-      st.wetB = lerp(lerp(st.wetB, avgB, sp * 0.45), s.color[2], mx * 0.55);
-
-      const h = clamp01(cfg.hardness - cfg.water * 0.2);
-      this.iterCircle(cx, cy, rad, ox, oy, img.width, img.height, (lx, ly, d, aa) => {
-        const a = softAlpha(d, h) * opa * aa;
-        this.blendPxBuf(img.data, img.width, img.height, lx, ly, ox, oy, st.wetR, st.wetG, st.wetB, a, false);
-      });
-    });
-  }
-
-  // ── Pastel ────────────────────────────────────────────────────────────────────
-  private dabPastel(cx: number, cy: number, rad: number, opa: number, s: StrokeSettings) {
-    this.patchDab(cx, cy, rad, 0, s, (img, ox, oy) => {
-      const [r,g,b] = s.color;
-      const { hardness } = s.brushConfig;
-      this.iterCircle(cx, cy, rad, ox, oy, img.width, img.height, (lx, ly, d, aa) => {
-        const grain = s.texture
-          ? texSample(s.texture, lx+ox, ly+oy)
-          : paperNoise(lx+ox, ly+oy);
-        const texOpa = (1 - grain) * 0.65 + grain * 0.35;
-        const a = softAlpha(d, hardness) * texOpa * opa * 0.7 * aa;
-        this.blendPxBuf(img.data, img.width, img.height, lx, ly, ox, oy, r, g, b, a, false);
-      });
-    });
-  }
-
-  // ── Blur — max-strength per pixel prevents over-blurring in overlapping areas ─
-  private dabBlur(cx: number, cy: number, rad: number, opa: number, s: StrokeSettings) {
-    const pre  = this.preStrokeImg;
-    const sbuf = this.strokeAlphaBuf;
-
-    if (!pre || !sbuf) {
-      // Fallback
-      const blurKR = Math.max(1, rad * 0.2 | 0);
-      this.patchDab(cx, cy, rad, blurKR, s, (img, ox, oy) => {
-        const src = new Uint8ClampedArray(img.data);
-        const pw = img.width, ph = img.height;
-        this.iterCircle(cx, cy, rad, ox, oy, pw, ph, (lx, ly, d, edgeAA) => {
-          const strength = softAlpha(d, 0) * opa * edgeAA;
-          if (strength < 0.005) return;
-          let rr=0, gg=0, bb=0, ba=0, cnt=0;
-          for (let ky=ly-blurKR; ky<=ly+blurKR; ky++) {
-            if (ky<0||ky>=ph) continue;
-            for (let kx=lx-blurKR; kx<=lx+blurKR; kx++) {
-              if (kx<0||kx>=pw) continue;
-              const ki = (ky*pw+kx)*4;
-              rr+=src[ki]; gg+=src[ki+1]; bb+=src[ki+2]; ba+=src[ki+3]; cnt++;
-            }
-          }
-          if (!cnt) return;
-          const i = (ly*pw+lx)*4;
-          img.data[i+0] = lerp(img.data[i+0], rr/cnt, strength);
-          img.data[i+1] = lerp(img.data[i+1], gg/cnt, strength);
-          img.data[i+2] = lerp(img.data[i+2], bb/cnt, strength);
-          img.data[i+3] = lerp(img.data[i+3], ba/cnt, strength);
+  private dabPen(cx: number, cy: number, rad: number, flow: number, opa: number, s: StrokeSettings) {
+    if (s.eraser) {
+      this.patchDabDirect(cx, cy, rad, 0, (img, ox, oy) => {
+        this.iterCircleDab(cx, cy, rad, ox, oy, img.width, img.height, s.brushConfig.hardness, (lx, ly, a) => {
+          const i = (ly * img.width + lx) * 4, t = a * flow;
+          img.data[i]   += (255 - img.data[i])   * t;
+          img.data[i+1] += (255 - img.data[i+1]) * t;
+          img.data[i+2] += (255 - img.data[i+2]) * t;
+          img.data[i+3] += (255 - img.data[i+3]) * t;
         });
       });
       return;
     }
-
-    const blurKR = Math.max(1, rad * 0.2 | 0);
-    const CW = this.ctx.canvas.width, CH = this.ctx.canvas.height;
-
-    this.patchDab(cx, cy, rad, blurKR, s, (img, ox, oy) => {
-      const pw = img.width, ph = img.height;
-      this.iterCircle(cx, cy, rad, ox, oy, pw, ph, (lx, ly, d, edgeAA) => {
-        const strength = softAlpha(d, 0) * opa * edgeAA;
-        if (strength < 0.005) return;
-
-        const gx = lx + ox, gy = ly + oy;
-        const bi = gy * CW + gx;
-        if (strength <= sbuf[bi]) return; // already blurred at higher strength — skip
-        sbuf[bi] = strength;
-
-        // Box-blur using pre-stroke pixels (prevents compounding across dabs)
-        let rr=0, gg=0, bb=0, ba=0, cnt=0;
-        for (let ky = gy - blurKR; ky <= gy + blurKR; ky++) {
-          if (ky < 0 || ky >= CH) continue;
-          for (let kx = gx - blurKR; kx <= gx + blurKR; kx++) {
-            if (kx < 0 || kx >= CW) continue;
-            const ki = (ky * CW + kx) * 4;
-            rr += pre.data[ki]; gg += pre.data[ki+1]; bb += pre.data[ki+2]; ba += pre.data[ki+3]; cnt++;
-          }
-        }
-        if (!cnt) return;
-
-        const pi = bi * 4;
-        const li = (ly * pw + lx) * 4;
-        img.data[li+0] = lerp(pre.data[pi+0], rr/cnt, strength);
-        img.data[li+1] = lerp(pre.data[pi+1], gg/cnt, strength);
-        img.data[li+2] = lerp(pre.data[pi+2], bb/cnt, strength);
-        img.data[li+3] = lerp(pre.data[pi+3], ba/cnt, strength);
+    this.patchDab(cx, cy, rad, 0, opa, (sb, pw, ph, _vis, ox, oy) => {
+      this.iterCircleDab(cx, cy, rad, ox, oy, pw, ph, s.brushConfig.hardness, (lx, ly, a) => {
+        this.blendPxBuf(sb, pw, ph, lx, ly, s.color[0], s.color[1], s.color[2], a * flow);
       });
     });
   }
 
-  // ── Static replay (for remote/undo) ──────────────────────────────────────────
-  static replay(ctx: CanvasRenderingContext2D,
-                points: { x: number; y: number; p: number; sp?: number }[],
-                s: StrokeSettings) {
-    if (!points.length) return;
-    const eng = new BrushEngine(ctx);
-    eng.beginStroke(points[0].x, points[0].y, points[0].p, points[0].sp ?? 0, s);
-    for (let i = 1; i < points.length; i++) {
-      eng.strokeTo(points[i].x, points[i].y, points[i].p, points[i].sp ?? 0, s);
+  private dabMarker(cx: number, cy: number, rad: number, flow: number, opa: number, s: StrokeSettings) {
+    if (s.eraser) {
+      this.patchDabDirect(cx, cy, rad, 0, (img, ox, oy) => {
+        this.iterCircleDab(cx, cy, rad, ox, oy, img.width, img.height, s.brushConfig.hardness, (lx, ly, a) => {
+          const i = (ly * img.width + lx) * 4, t = a * flow * 0.85;
+          img.data[i]   += (255 - img.data[i])   * t;
+          img.data[i+1] += (255 - img.data[i+1]) * t;
+          img.data[i+2] += (255 - img.data[i+2]) * t;
+          img.data[i+3] += (255 - img.data[i+3]) * t;
+        });
+      });
+      return;
     }
+    this.patchDab(cx, cy, rad, 0, opa, (sb, pw, ph, _vis, ox, oy) => {
+      this.iterCircleDab(cx, cy, rad, ox, oy, pw, ph, s.brushConfig.hardness, (lx, ly, a) => {
+        this.blendPxBuf(sb, pw, ph, lx, ly, s.color[0], s.color[1], s.color[2], a * flow * 0.85);
+      });
+    });
+  }
+
+  private dabPencil(cx: number, cy: number, rad: number, flow: number, opa: number, s: StrokeSettings) {
+    this.patchDab(cx, cy, rad, 0, opa, (sb, pw, ph, _vis, ox, oy) => {
+      const rr = rad * rad;
+      for (let ly = 0; ly < ph; ly++) for (let lx = 0; lx < pw; lx++) {
+        const dx = (lx + ox) - cx, dy = (ly + oy) - cy, d2 = dx * dx + dy * dy; if (d2 >= rr) continue;
+        const a = softAlpha(Math.sqrt(d2) / rad, s.brushConfig.hardness) * (paperNoise(lx + ox, ly + oy) * 0.8 + 0.2) * flow;
+        this.blendPxBuf(sb, pw, ph, lx, ly, s.color[0], s.color[1], s.color[2], a);
+      }
+    });
+  }
+
+  private dabCrayon(cx: number, cy: number, rad: number, flow: number, opa: number, s: StrokeSettings) {
+    this.patchDab(cx, cy, rad, 0, opa, (sb, pw, ph, vis, ox, oy) => {
+      const rr = rad * rad;
+      for (let ly = 0; ly < ph; ly++) for (let lx = 0; lx < pw; lx++) {
+        const dx = (lx + ox) - cx, dy = (ly + oy) - cy, d2 = dx * dx + dy * dy; if (d2 >= rr) continue;
+        const a = softAlpha(Math.sqrt(d2) / rad, s.brushConfig.hardness) * paperNoise(lx + ox, ly + oy) ** 2 * flow;
+        if (a < 0.005) continue;
+        const i = (ly * pw + lx) * 4;
+        this.blendPxBuf(sb, pw, ph, lx, ly,
+          lerp(s.color[0], vis[i], 0.3), lerp(s.color[1], vis[i+1], 0.3), lerp(s.color[2], vis[i+2], 0.3), a);
+      }
+    });
+  }
+
+  private dabAirbrush(cx: number, cy: number, rad: number, flow: number, opa: number, s: StrokeSettings) {
+    const cr = rad * s.brushConfig.hardness, sig = Math.max(1, (rad - cr) * 0.6), tr = cr + sig * 3;
+    this.patchDab(cx, cy, tr, 0, opa, (sb, pw, ph, _vis, ox, oy) => {
+      const tr2 = tr * tr;
+      for (let ly = 0; ly < ph; ly++) for (let lx = 0; lx < pw; lx++) {
+        const dx = (lx + ox) - cx, dy = (ly + oy) - cy, d2 = dx * dx + dy * dy; if (d2 > tr2) continue;
+        const d = Math.sqrt(d2), a = (d <= cr ? 1 : Math.exp(-0.5 * ((d - cr) / sig) ** 2)) * flow;
+        if (a > 0.003) this.blendPxBuf(sb, pw, ph, lx, ly, s.color[0], s.color[1], s.color[2], a);
+      }
+    });
+  }
+
+  private dabWatercolor(cx: number, cy: number, rad: number, flow: number, opa: number, s: StrokeSettings) {
+    this.patchDab(cx, cy, rad, 0, opa, (sb, pw, ph, vis, ox, oy) => {
+      // Sample from current visible canvas (vis) for wet mixing
+      const [ar, ag, ab] = this.avgColor(vis, pw, ph, cx, cy, rad * 0.6, ox, oy);
+      const st = this.state; if (!st.wetInit) { st.wetR = ar; st.wetG = ag; st.wetB = ab; st.wetInit = true; }
+      st.wetR = lerp(lerp(ar, st.wetR, s.brushConfig.spread * 0.5), s.color[0], s.brushConfig.mixing * 0.7);
+      st.wetG = lerp(lerp(ag, st.wetG, s.brushConfig.spread * 0.5), s.color[1], s.brushConfig.mixing * 0.7);
+      st.wetB = lerp(lerp(ab, st.wetB, s.brushConfig.spread * 0.5), s.color[2], s.brushConfig.mixing * 0.7);
+      const rr = rad * rad, f = s.brushConfig.water * flow * 0.55;
+      for (let ly = 0; ly < ph; ly++) for (let lx = 0; lx < pw; lx++) {
+        const dx = (lx + ox) - cx, dy = (ly + oy) - cy, d2 = dx * dx + dy * dy; if (d2 > rr) continue;
+        const ni = Math.sqrt(d2) / rad, a = (Math.exp(-3 * ni * ni) + Math.exp(-30 * (ni - 0.7) ** 2) * 0.35) * f * clamp01((1 - ni) * 10);
+        if (a > 0.003) this.blendPxBuf(sb, pw, ph, lx, ly, st.wetR, st.wetG, st.wetB, a);
+      }
+    });
+  }
+
+  private dabOil(cx: number, cy: number, rad: number, flow: number, opa: number, s: StrokeSettings) {
+    this.patchDab(cx, cy, rad, 0, opa, (sb, pw, ph, vis, ox, oy) => {
+      const [ar, ag, ab] = this.avgColor(vis, pw, ph, cx, cy, rad * 0.35, ox, oy);
+      const st = this.state; if (!st.wetInit) { st.wetR = s.color[0]; st.wetG = s.color[1]; st.wetB = s.color[2]; st.wetInit = true; }
+      const { spread, mixing, water, hardness } = s.brushConfig;
+      st.wetR = lerp(lerp(st.wetR, ar, spread * 0.30), s.color[0], mixing * 0.80);
+      st.wetG = lerp(lerp(st.wetG, ag, spread * 0.30), s.color[1], mixing * 0.80);
+      st.wetB = lerp(lerp(st.wetB, ab, spread * 0.30), s.color[2], mixing * 0.80);
+      const ux = st.dirX, uy = st.dirY, qx = -uy, qy = ux, ra = rad * 0.55, rp = rad, h = clamp01(hardness - water * 0.2);
+      for (let ly = 0; ly < ph; ly++) for (let lx = 0; lx < pw; lx++) {
+        const dx = (lx + ox) - cx, dy = (ly + oy) - cy, al = dx * ux + dy * uy, pe = dx * qx + dy * qy, ed = Math.sqrt((al / ra) ** 2 + (pe / rp) ** 2);
+        if (ed > 1.15) continue;
+        const ef = clamp01(ed + (0.5 - (Math.sin(Math.atan2(pe, al) * 9) * 0.5 + 0.5)) * clamp01((ed - 0.6) / 0.4) * 0.25);
+        this.blendPxBuf(sb, pw, ph, lx, ly, st.wetR, st.wetG, st.wetB, softAlpha(ef, h) * flow);
+      }
+    });
+  }
+
+  private dabPastel(cx: number, cy: number, rad: number, flow: number, opa: number, s: StrokeSettings) {
+    this.patchDab(cx, cy, rad, 0, opa, (sb, pw, ph, _vis, ox, oy) => {
+      const rr = rad * rad;
+      for (let ly = 0; ly < ph; ly++) for (let lx = 0; lx < pw; lx++) {
+        const dx = (lx + ox) - cx, dy = (ly + oy) - cy, d2 = dx * dx + dy * dy; if (d2 >= rr) continue;
+        const g = paperNoise(lx + ox, ly + oy), a = softAlpha(Math.sqrt(d2) / rad, s.brushConfig.hardness) * ((1 - g) * 0.65 + g * 0.35) * flow * 0.7;
+        this.blendPxBuf(sb, pw, ph, lx, ly, s.color[0], s.color[1], s.color[2], a);
+      }
+    });
+  }
+
+  private dabBlur(cx: number, cy: number, rad: number, flow: number, s: StrokeSettings) {
+    const b = Math.max(1, rad * 0.2 | 0), rr = rad * rad;
+    const CW = this.ctx.canvas.width, pre = this.preStrokeImg;
+    this.patchDabDirect(cx, cy, rad, b, (img, ox, oy) => {
+      const pw = img.width, ph = img.height, ab = this.strokeAlphaBuf;
+      if (!pre || !ab) return;
+      for (let ly = 0; ly < ph; ly++) for (let lx = 0; lx < pw; lx++) {
+        const dx = (lx + ox) - cx, dy = (ly + oy) - cy, d2 = dx * dx + dy * dy; if (d2 >= rr) continue;
+        const st = softAlpha(Math.sqrt(d2) / rad, 0) * flow; if (st < 0.005) continue;
+        const bi = (ly + oy) * CW + (lx + ox); if (st <= ab[bi]) continue; ab[bi] = st;
+        let sr = 0, sg = 0, sb = 0, sa = 0, c = 0;
+        for (let ky = (ly+oy) - b; ky <= (ly+oy) + b; ky++) for (let kx = (lx+ox) - b; kx <= (lx+ox) + b; kx++) {
+          if (ky >= 0 && ky < this.ctx.canvas.height && kx >= 0 && kx < CW) { const k = (ky * CW + kx) * 4; sr += pre.data[k]; sg += pre.data[k+1]; sb += pre.data[k+2]; sa += pre.data[k+3]; c++; }
+        }
+        if (c) { const i = (ly * pw + lx) * 4; img.data[i] = lerp(pre.data[bi*4], sr / c, st); img.data[i+1] = lerp(pre.data[bi*4+1], sg / c, st); img.data[i+2] = lerp(pre.data[bi*4+2], sb / c, st); img.data[i+3] = lerp(pre.data[bi*4+3], sa / c, st); }
+      }
+    });
+  }
+
+  static replay(ctx: CanvasRenderingContext2D, points: { x: number; y: number; p: number; sp?: number }[], s: StrokeSettings) {
+    if (!points.length) return; const eng = new BrushEngine(ctx);
+    eng.beginStroke(points[0].x, points[0].y, points[0].p, points[0].sp ?? 0, s);
+    for (let i = 1; i < points.length; i++) eng.strokeTo(points[i].x, points[i].y, points[i].p, points[i].sp ?? 0, s);
   }
 }

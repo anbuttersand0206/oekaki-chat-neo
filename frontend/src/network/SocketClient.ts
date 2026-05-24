@@ -1,16 +1,23 @@
 import { io, Socket } from 'socket.io-client';
 import { DrawOp, User } from '../types';
 
+/**
+ * The SocketClient manages the real-time WebSocket connection to the backend.
+ * It uses Socket.IO for reliable communication and provides a high-level API
+ * for joining rooms, emitting drawing operations, and handling incoming events
+ * with an isolated error-handling wrapper.
+ */
 export class SocketClient {
   private socket: Socket;
 
-  onRoomJoined?: (data: { roomId: string; userId: string; users: User[]; canvasState: string | null }) => void;
+  onRoomJoined?: (data: { roomId: string; userId: string; users: User[]; canvasState: string | null; brushSettings: Record<string, unknown> | null; chatHistory: Array<{ userId: string; username: string; message: string; time: number }> }) => void;
   onRoomError?: (data: { code: string; message: string }) => void;
   onUserJoined?: (user: User) => void;
   onUserLeft?: (data: { id: string }) => void;
   onDrawOp?: (op: DrawOp & { userId: string }) => void;
   onCursorMove?: (data: { userId: string; username: string; x: number; y: number }) => void;
   onChatMessage?: (data: { userId: string; username: string; message: string; time: number }) => void;
+  onReconnectFailed?: () => void;
 
   constructor() {
     this.socket = io({
@@ -21,16 +28,23 @@ export class SocketClient {
       reconnectionAttempts: 10
     });
 
-    this.socket.on('room_joined', (data) => this.onRoomJoined?.(data));
-    this.socket.on('room_error', (data) => this.onRoomError?.(data));
-    this.socket.on('user_joined', (user) => this.onUserJoined?.(user));
-    this.socket.on('user_left', (data) => this.onUserLeft?.(data));
-    this.socket.on('draw_op', (op) => this.onDrawOp?.(op));
-    this.socket.on('cursor_move', (data) => this.onCursorMove?.(data));
-    this.socket.on('chat_message', (data) => this.onChatMessage?.(data));
+    // ハンドラ内の例外を隔離してログするラッパー。
+    // 1つのハンドラが throw しても他のイベント処理が止まらないようにするため。
+    const wrapEventHandler = (eventName: string, fn: () => void) => {
+      try { fn(); } catch (e) { console.error(`[socket:${eventName}]`, e); }
+    };
 
-    this.socket.on('connect', () => console.log('Socket connected'));
-    this.socket.on('disconnect', (reason) => console.warn('Socket disconnected:', reason));
+    this.socket.on('room_joined',  (data) => wrapEventHandler('room_joined',  () => this.onRoomJoined?.(data)));
+    this.socket.on('room_error',   (data) => wrapEventHandler('room_error',   () => this.onRoomError?.(data)));
+    this.socket.on('user_joined',  (user) => wrapEventHandler('user_joined',  () => this.onUserJoined?.(user)));
+    this.socket.on('user_left',    (data) => wrapEventHandler('user_left',    () => this.onUserLeft?.(data)));
+    this.socket.on('draw_op',      (op)   => wrapEventHandler('draw_op',      () => this.onDrawOp?.(op)));
+    this.socket.on('cursor_move',  (data) => wrapEventHandler('cursor_move',  () => this.onCursorMove?.(data)));
+    this.socket.on('chat_message', (data) => wrapEventHandler('chat_message', () => this.onChatMessage?.(data)));
+
+    this.socket.on('connect',            () => console.log('Socket connected'));
+    this.socket.on('disconnect',   (reason) => console.warn('Socket disconnected:', reason));
+    this.socket.on('reconnect_failed',   () => this.onReconnectFailed?.());
   }
 
   joinRoom(roomId: string, password: string, username: string) {
@@ -51,6 +65,10 @@ export class SocketClient {
 
   emitChatMessage(message: string) {
     this.socket.emit('chat_message', { message });
+  }
+
+  emitBrushSettings(settings: Record<string, unknown>) {
+    this.socket.emit('brush_settings', { settings });
   }
 
   disconnect() {

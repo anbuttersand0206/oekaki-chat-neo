@@ -452,15 +452,10 @@ html, body {
 }
 
 #main-canvas {
-  position: absolute;
-  top: 0; left: 0;
   display: block;
-  box-shadow: 0 4px 32px rgba(0,0,0,.5);
 }
 
 #overlay-canvas {
-  position: absolute;
-  top: 0; left: 0;
   pointer-events: none;
   display: block;
 }
@@ -1223,4 +1218,47 @@ input:focus-visible { outline: none; }
   flex-direction: column;
   gap: 4px;
   flex: 1;
+}
+
+/* ── Chat toast ───────────────────────────────────────────────────────────── */
+#chat-toast-container {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.chat-toast {
+  background: var(--panel-bg);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 8px 12px;
+  max-width: 260px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+
+.chat-toast.fade-out {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.chat-toast-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+.chat-toast-msg {
+  font-size: 12px;
+  color: var(--text);
+  word-break: break-word;
+  white-space: pre-wrap;
 }

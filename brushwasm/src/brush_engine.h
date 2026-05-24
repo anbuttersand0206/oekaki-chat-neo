@@ -61,36 +61,36 @@ public:
 
 private:
     StrokeState s_;
-    std::vector<uint8_t> canvas_;    // live canvas (RGBA)
+    std::vector<uint8_t> canvas_;    // live canvas (RGBA), always shows composite result
     std::vector<uint8_t> preStroke_; // snapshot at stroke start
-    std::vector<float>   alphaBuf_;  // per-pixel max-alpha for this stroke
+    std::vector<uint8_t> strokeBuf_; // accumulated dabs (transparent bg), composited via opa
+    std::vector<float>   alphaBuf_;  // per-pixel max-alpha for blur stroke
     int cw_=0, ch_=0;
 
     float rng();
     float evalCurve(const std::vector<CurvePt>& cv, float x) const;
     float resolve(ParamId pid, float base, float pressure, float speed, const BrushCfg& cfg);
 
-    void dab(const BrushCfg&, float cx, float cy, float rad, float opa);
+    // Dispatch a single dab. flow = density-driven per-dab alpha, opa = stroke opacity.
+    void dab(const BrushCfg&, float cx, float cy, float rad, float flow, float opa);
 
-    void dabPen       (const BrushCfg&, float cx, float cy, float r, float a);
-    void dabMarker    (const BrushCfg&, float cx, float cy, float r, float a);
-    void dabPencil    (const BrushCfg&, float cx, float cy, float r, float a);
-    void dabCrayon    (const BrushCfg&, float cx, float cy, float r, float a);
-    void dabAirbrush  (const BrushCfg&, float cx, float cy, float r, float a);
-    void dabWatercolor(const BrushCfg&, float cx, float cy, float r, float a);
-    void dabOil       (const BrushCfg&, float cx, float cy, float r, float a);
-    void dabPastel    (const BrushCfg&, float cx, float cy, float r, float a);
-    void dabBlur      (const BrushCfg&, float cx, float cy, float r, float a);
+    void dabPen       (const BrushCfg&, float cx, float cy, float r, float flow, float opa);
+    void dabMarker    (const BrushCfg&, float cx, float cy, float r, float flow, float opa);
+    void dabPencil    (const BrushCfg&, float cx, float cy, float r, float flow, float opa);
+    void dabCrayon    (const BrushCfg&, float cx, float cy, float r, float flow, float opa);
+    void dabAirbrush  (const BrushCfg&, float cx, float cy, float r, float flow, float opa);
+    void dabWatercolor(const BrushCfg&, float cx, float cy, float r, float flow, float opa);
+    void dabOil       (const BrushCfg&, float cx, float cy, float r, float flow, float opa);
+    void dabPastel    (const BrushCfg&, float cx, float cy, float r, float flow, float opa);
+    void dabBlur      (const BrushCfg&, float cx, float cy, float r, float flow);
 
-    // Blend at canvas-global pixel (gx,gy) against current canvas
-    void blendPx(int gx, int gy, float r, float g, float b, float alpha, bool eraser);
-    // Max-alpha blend at (gx,gy) compositing against preStroke_ snapshot
-    void blendPxBuf(int gx, int gy, float r, float g, float b, float alpha, bool eraser);
+    // Blend directly into canvas_ with alpha limit (eraser uses this).
+    void blendPx(int gx, int gy, float r, float g, float b, float alpha, float limit, bool eraser);
+    // Blend into strokeBuf_, then composite preStroke_+strokeBuf_*opa → canvas_.
+    void blendPxBuf(int gx, int gy, float r, float g, float b, float alpha, float opa);
 
     float paperNoise(int gx, int gy) const;
     void  avgColor(float cx, float cy, float r, float& ar, float& ag, float& ab) const;
-    void  avgColorFrom(const std::vector<uint8_t>& src, float cx, float cy, float r,
-                       float& ar, float& ag, float& ab) const;
 
     static float softAlpha(float d, float hardness);
 };

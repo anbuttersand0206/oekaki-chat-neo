@@ -1,38 +1,19 @@
-import { BrushConfig, BrushType, CurvePoint, PARAM_IDS, defaultBrushConfig } from '../types';
-
-const PRE = 'oekaki_brush_';
-const EXPIRES_DAYS = 365;
-
-// ── Cookie helpers ─────────────────────────────────────────────────────────────
-
-function cookieSet(name: string, value: string) {
-  const exp = new Date(Date.now() + EXPIRES_DAYS * 86400000).toUTCString();
-  document.cookie =
-    `${PRE}${name}=${encodeURIComponent(value)};expires=${exp};path=/;SameSite=Lax`;
-}
-
-function cookieGet(name: string): string | null {
-  const key = PRE + name;
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const m = document.cookie.match(new RegExp('(?:^|; )' + escaped + '=([^;]*)'));
-  return m ? decodeURIComponent(m[1]) : null;
-}
+import { BrushConfig, BrushType, BRUSH_TYPES, CurvePoint, PARAM_IDS, defaultBrushConfig } from '../types';
 
 // ── Number precision helper ────────────────────────────────────────────────────
 
 function r3(n: number) { return Math.round(n * 1000) / 1000; }
 
-// ── Serialization ──────────────────────────────────────────────────────────────
+function compactPts(pts: CurvePoint[]) {
+  return pts.map(p => {
+    const o: Record<string, number> = { x: r3(p.x), y: r3(p.y) };
+    if (p.lx != null) { o.lx = r3(p.lx); o.ly = r3(p.ly!); }
+    if (p.rx != null) { o.rx = r3(p.rx); o.ry = r3(p.ry!); }
+    return o;
+  });
+}
 
 function compactConfig(cfg: BrushConfig) {
-  const compactPts = (pts: CurvePoint[]) =>
-    pts.map(p => {
-      const o: Record<string, number> = { x: r3(p.x), y: r3(p.y) };
-      if (p.lx != null) { o.lx = r3(p.lx); o.ly = r3(p.ly!); }
-      if (p.rx != null) { o.rx = r3(p.rx); o.ry = r3(p.ry!); }
-      return o;
-    });
-
   return {
     size:     cfg.size,
     opacity:  r3(cfg.opacity),
@@ -55,48 +36,56 @@ function compactConfig(cfg: BrushConfig) {
   };
 }
 
-// ── Public API ─────────────────────────────────────────────────────────────────
-
-export function saveBrushCfg(cfg: BrushConfig) {
-  try {
-    cookieSet(cfg.type, JSON.stringify(compactConfig(cfg)));
-  } catch { /* cookie too large or blocked — silently skip */ }
-}
-
-export function loadBrushCfg(type: BrushType): BrushConfig {
-  const raw = cookieGet(type);
+function expandConfig(type: BrushType, s: Record<string, unknown>): BrushConfig {
   const defaults = defaultBrushConfig(type);
-  if (!raw) return defaults;
-
-  try {
-    const s = JSON.parse(raw);
-    const mods = { ...defaults.modifiers };
-    if (s.modifiers) {
-      for (const pid of PARAM_IDS) {
-        if (s.modifiers[pid]) mods[pid] = s.modifiers[pid];
-      }
+  const mods = { ...defaults.modifiers };
+  if (s.modifiers && typeof s.modifiers === 'object') {
+    const rawMods = s.modifiers as Record<string, unknown>;
+    for (const pid of PARAM_IDS) {
+      if (rawMods[pid]) mods[pid] = rawMods[pid] as typeof mods[typeof pid];
     }
-    return {
-      type,
-      size:     typeof s.size     === 'number' ? s.size     : defaults.size,
-      opacity:  typeof s.opacity  === 'number' ? s.opacity  : defaults.opacity,
-      density:  typeof s.density  === 'number' ? s.density  : defaults.density,
-      spacing:  typeof s.spacing  === 'number' ? s.spacing  : defaults.spacing,
-      hardness: typeof s.hardness === 'number' ? s.hardness : defaults.hardness,
-      mixing:   typeof s.mixing   === 'number' ? s.mixing   : defaults.mixing,
-      water:    typeof s.water    === 'number' ? s.water    : defaults.water,
-      spread:   typeof s.spread   === 'number' ? s.spread   : defaults.spread,
-      modifiers: mods,
-    };
-  } catch {
-    return defaults;
   }
+  return {
+    type,
+    size:     typeof s.size     === 'number' ? s.size     : defaults.size,
+    opacity:  typeof s.opacity  === 'number' ? s.opacity  : defaults.opacity,
+    density:  typeof s.density  === 'number' ? s.density  : defaults.density,
+    spacing:  typeof s.spacing  === 'number' ? s.spacing  : defaults.spacing,
+    hardness: typeof s.hardness === 'number' ? s.hardness : defaults.hardness,
+    mixing:   typeof s.mixing   === 'number' ? s.mixing   : defaults.mixing,
+    water:    typeof s.water    === 'number' ? s.water    : defaults.water,
+    spread:   typeof s.spread   === 'number' ? s.spread   : defaults.spread,
+    modifiers: mods,
+  };
 }
 
-export function saveActiveBrushType(type: BrushType) {
-  try { cookieSet('type', type); } catch { /* ignore */ }
+// ── Public serialization API ───────────────────────────────────────────────────
+
+export function serializeAllConfigs(
+  allConfigs: Map<BrushType, BrushConfig>,
+  activeType: BrushType
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { activeType };
+  for (const [type, cfg] of allConfigs) {
+    result[type] = compactConfig(cfg);
+  }
+  return result;
 }
 
-export function loadActiveBrushType(): BrushType | null {
-  return cookieGet('type') as BrushType | null;
+export function deserializeAllConfigs(raw: Record<string, unknown>): {
+  activeType: BrushType | null;
+  configs: Map<BrushType, BrushConfig>;
+} {
+  const configs = new Map<BrushType, BrushConfig>();
+  const activeType = typeof raw.activeType === 'string' ? raw.activeType as BrushType : null;
+  for (const type of BRUSH_TYPES) {
+    const entry = raw[type];
+    configs.set(
+      type,
+      entry && typeof entry === 'object'
+        ? expandConfig(type, entry as Record<string, unknown>)
+        : defaultBrushConfig(type)
+    );
+  }
+  return { activeType, configs };
 }

@@ -1,10 +1,19 @@
+import { escapeHtml } from '../utils';
+
 type Screen = 'room' | 'draw';
 
+/**
+ * Manages the Room-related UI components, including the lobby (join/create)
+ * and the in-room user list and chat interface.
+ */
 export class RoomUI {
   onCreateRoom?: (roomId: string, password: string, username: string) => Promise<void>;
   onJoinRoom?: (roomId: string, password: string, username: string) => Promise<void>;
   onLeaveRoom?: () => void;
 
+  /**
+   * Initializes event listeners for tabs, buttons, and keyboard inputs.
+   */
   init() {
     // Tab switching
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -88,11 +97,17 @@ export class RoomUI {
     });
   }
 
+  /**
+   * Switches the visible screen between the lobby and the drawing canvas.
+   */
   showScreen(screen: Screen) {
     document.getElementById('room-screen')!.classList.toggle('active', screen === 'room');
     document.getElementById('draw-screen')!.classList.toggle('active', screen === 'draw');
   }
 
+  /**
+   * Displays an error message to the user for 5 seconds.
+   */
   showError(msg: string) {
     const el = document.getElementById('room-error')!;
     el.textContent = msg;
@@ -100,28 +115,37 @@ export class RoomUI {
     setTimeout(() => { el.hidden = true; }, 5000);
   }
 
+  /**
+   * Updates the room ID and user count displayed in the UI.
+   */
   setRoomInfo(roomId: string, userCount: number, maxUsers: number) {
     document.getElementById('room-id-display')!.textContent = `#${roomId}`;
     document.getElementById('user-count-display')!.textContent = `${userCount}/${maxUsers}人`;
   }
 
+  /**
+   * Refreshes the user list sidebar with current participants.
+   */
   updateUserList(users: { id: string; name: string; color?: string }[]) {
     const list = document.getElementById('users-list')!;
     list.innerHTML = users.map(u => `
       <li class="user-item" style="border-left: 3px solid ${u.color ?? '#5b8fff'}">
         <span class="user-dot" style="background:${u.color ?? '#5b8fff'}"></span>
-        ${escHtml(u.name)}
+        ${escapeHtml(u.name)}
       </li>
     `).join('');
     document.getElementById('user-badge')!.textContent = String(users.length);
     document.getElementById('user-count-display')!.textContent = `${users.length}/5人`;
   }
 
+  /**
+   * Adds a new message to the chat interface.
+   */
   addChatMessage(username: string, message: string, isSelf: boolean) {
     const msgs = document.getElementById('chat-messages')!;
     const div = document.createElement('div');
     div.className = `chat-msg${isSelf ? ' self' : ''}`;
-    div.innerHTML = `<span class="chat-name">${escHtml(username)}</span>: ${escHtml(message)}`;
+    div.innerHTML = `<span class="chat-name">${escapeHtml(username)}</span>: ${escapeHtml(message)}`;
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
   }
@@ -132,8 +156,4 @@ export class RoomUI {
       if (el) el.disabled = v;
     });
   }
-}
-
-function escHtml(s: string): string {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }

@@ -85,6 +85,12 @@ export function replayStroke(
 }
 
 // ── WasmBrushEngine ───────────────────────────────────────────────────────────
+/**
+ * The WasmBrushEngine acts as a high-performance bridge to the C++ brush engine
+ * compiled via Emscripten. It optimizes drawing by using direct memory access
+ * to the Wasm heap and implementing "dirty-rectangle" flushing to minimize
+ * data transfer between Wasm and the main thread's Canvas context.
+ */
 export class WasmBrushEngine {
   private readonly id: number;
   private ptr = 0;
