@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -14,7 +15,11 @@ class Room(models.Model):
 
 
 class BrushSettings(models.Model):
-    username = models.CharField(max_length=20, unique=True)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='brush_settings',
+    )
     settings = models.JSONField(default=dict)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -24,11 +29,33 @@ class BrushSettings(models.Model):
 
 class ChatMessage(models.Model):
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='chat_messages')
-    user_id = models.CharField(max_length=36)
-    username = models.CharField(max_length=20)
+    # Nullable because messages sent before auth migration don't have a linked user
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='chat_messages',
+    )
+    username = models.CharField(max_length=20)  # denormalized display name
     message = models.CharField(max_length=500)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'rooms_chatmessage'
         ordering = ['created_at']
+
+
+class UserRoom(models.Model):
+    """Tracks which rooms a user has joined (for the dashboard room list)."""
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='user_rooms',
+    )
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='user_rooms')
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'rooms_userroom'
+        unique_together = ('user', 'room')
+        ordering = ['-joined_at']

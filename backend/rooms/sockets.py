@@ -1,9 +1,9 @@
 import asyncio
+import http.cookies
 import json as json_mod
 import logging
 import os
 import time
-import uuid
 from datetime import timedelta
 from typing import Any, Optional
 
@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 CORS_ORIGIN = os.environ.get('CORS_ORIGIN', 'http://localhost:8080')
 MAX_BUFFER = 20 * 1024 * 1024  # 20 MB (canvas state)
 ROOM_TTL_MINUTES = 30
-CLEANUP_INTERVAL_SECONDS = 5 * 60  # Check DB every 5 minutes
+CLEANUP_INTERVAL_SECONDS = 5 * 60
 
 # ── Validation constants ───────────────────────────────────────────────────────
-_MAX_CANVAS_BYTES = 3 * 1024 * 1024        # 3 MB — WebP at 0.85q for 1600×1200 fits well under this
-_MAX_POINTS = 5_000                         # max dab points per stroke op
-_MAX_BRUSH_JSON = 64_000                    # 64 KB for serialised brush settings
+_MAX_CANVAS_BYTES = 3 * 1024 * 1024
+_MAX_POINTS = 5_000
+_MAX_BRUSH_JSON = 64_000
 _VALID_OP_TYPES = frozenset({'stroke', 'fill', 'clear', 'paste'})
 _MAX_RATE_ENTRIES = 10_000
 
@@ -33,15 +33,14 @@ sio = socketio.AsyncServer(
 
 # ── In-memory state ────────────────────────────────────────────────────────────
 # active_users: room_id -> {sid: {id, name}}
+# id here is str(accounts.User.id)
 active_users: dict[str, dict[str, dict[str, str]]] = {}
 # join_attempts: ip -> {count, reset_at}
 join_attempts: dict[str, dict[str, Any]] = {}
-# Background cleanup task (runs once)
 _cleanup_task: Optional[asyncio.Task] = None
 
 
 async def _cleanup_loop() -> None:
-    """Periodically deletes rooms that have been empty for too long."""
     from .models import Room
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
@@ -54,12 +53,33 @@ async def _cleanup_loop() -> None:
             logger.error(f'[cleanup] error during cleanup: {e}', exc_info=True)
 
 
+async def _get_session_user(cookie_str: str):
+    """Validate the Django session cookie and return the authenticated User, or None."""
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.contrib.auth import get_user_model
+
+    try:
+        cookies = http.cookies.SimpleCookie()
+        cookies.load(cookie_str)
+        morsel = cookies.get('sessionid')
+        if not morsel:
+            return None
+
+        session = SessionStore(session_key=morsel.value)
+        auth_user_id = await asyncio.to_thread(lambda: session.get('_auth_user_id'))
+        if not auth_user_id:
+            return None
+
+        User = get_user_model()
+        return await User.objects.aget(id=int(auth_user_id), is_active=True)
+    except Exception:
+        return None
+
+
 def _is_rate_limited(ip: str) -> bool:
-    """Checks if an IP address is exceeding the join room rate limit."""
     now = time.time()
     entry = join_attempts.get(ip)
     if not entry or now > entry['reset_at']:
-        # Purge expired entries when the dict grows too large
         if len(join_attempts) > _MAX_RATE_ENTRIES:
             expired = [k for k, v in join_attempts.items() if now > v['reset_at']]
             for k in expired:
@@ -71,7 +91,6 @@ def _is_rate_limited(ip: str) -> bool:
 
 
 def _is_valid_data_url(value: Any) -> bool:
-    """Returns True if value is a string starting with data:image/ within size limit."""
     return (isinstance(value, str)
             and value.startswith('data:image/')
             and len(value) <= _MAX_CANVAS_BYTES)
@@ -80,7 +99,6 @@ def _is_valid_data_url(value: Any) -> bool:
 # ── Handlers ───────────────────────────────────────────────────────────────────
 
 async def on_connect(sid: str, environ: dict, auth: Optional[Any] = None) -> None:
-    """Handles new Socket.IO connections and initializes cleanup task."""
     global _cleanup_task
     if _cleanup_task is None or _cleanup_task.done():
         _cleanup_task = asyncio.create_task(_cleanup_loop())
@@ -89,12 +107,22 @@ async def on_connect(sid: str, environ: dict, auth: Optional[Any] = None) -> Non
     ip = (headers.get('x-real-ip')
           or headers.get('x-forwarded-for', '').split(',')[0].strip()
           or (environ.get('client') or [''])[0])
-    await sio.save_session(sid, {'ip': ip})
+
+    cookie_str = headers.get('cookie', '')
+    user = await _get_session_user(cookie_str)
+    if user is None:
+        logger.warning(f'[connect] unauthenticated connection rejected: sid={sid}')
+        return False  # reject the connection
+
+    await sio.save_session(sid, {
+        'ip': ip,
+        'auth_user_id': user.id,
+        'username': user.username,
+    })
 
 
 async def on_join_room(sid: str, data: Any) -> None:
-    """Handles room entry requests, validating credentials and state."""
-    from .models import Room, BrushSettings, ChatMessage
+    from .models import Room, BrushSettings, ChatMessage, UserRoom
 
     if not isinstance(data, dict):
         await sio.emit('room_error', {'code': 'INVALID', 'message': '入力が不正です'}, to=sid)
@@ -102,6 +130,8 @@ async def on_join_room(sid: str, data: Any) -> None:
 
     session = await sio.get_session(sid)
     ip = session.get('ip', '')
+    auth_user_id = session.get('auth_user_id')
+    username = session.get('username')
 
     if _is_rate_limited(ip):
         await sio.emit('room_error', {
@@ -112,9 +142,8 @@ async def on_join_room(sid: str, data: Any) -> None:
 
     room_id = str(data.get('roomId', '')).strip()
     password = str(data.get('password', ''))
-    username = str(data.get('username', '')).strip()[:20]
 
-    if not room_id or not password or not username:
+    if not room_id or not password:
         await sio.emit('room_error', {'code': 'INVALID', 'message': '入力が不正です'}, to=sid)
         return
 
@@ -139,32 +168,37 @@ async def on_join_room(sid: str, data: Any) -> None:
         await sio.emit('room_error', {'code': 'WRONG_PASSWORD', 'message': 'パスワードが違います'}, to=sid)
         return
 
-    # Clear empty timestamp if user rejoins
     await Room.objects.filter(id=room_id).aupdate(last_emptied_at=None)
 
+    # Record room membership for dashboard
+    await UserRoom.objects.aupdate_or_create(
+        user_id=auth_user_id,
+        room_id=room_id,
+        defaults={},
+    )
+
     try:
-        brush_settings_record = await BrushSettings.objects.aget(username=username)
+        brush_settings_record = await BrushSettings.objects.aget(user_id=auth_user_id)
         brush_settings = brush_settings_record.settings
     except BrushSettings.DoesNotExist:
         brush_settings = None
 
-    # Fetch recent chat history (limit to 50 for payload efficiency)
     chat_history = []
     async for msg in ChatMessage.objects.filter(room_id=room_id).order_by('-created_at')[:50]:
         chat_history.append({
-            'userId': msg.user_id,
+            'userId': str(msg.user_id) if msg.user_id else None,
             'username': msg.username,
             'message': msg.message,
             'time': int(msg.created_at.timestamp() * 1000),
         })
     chat_history.reverse()
 
-    user_id = str(uuid.uuid4())
+    user_id = str(auth_user_id)
     if room_id not in active_users:
         active_users[room_id] = {}
     active_users[room_id][sid] = {'id': user_id, 'name': username}
 
-    await sio.save_session(sid, {**session, 'room_id': room_id, 'user_id': user_id, 'username': username})
+    await sio.save_session(sid, {**session, 'room_id': room_id, 'user_id': user_id})
     await sio.enter_room(sid, room_id)
 
     await sio.emit('room_joined', {
@@ -179,7 +213,6 @@ async def on_join_room(sid: str, data: Any) -> None:
 
 
 async def on_draw_op(sid: str, data: Any) -> None:
-    """Validates and broadcasts drawing operations to other users in the same room."""
     session = await sio.get_session(sid)
     room_id = session.get('room_id')
     if not room_id or not isinstance(data, dict):
@@ -202,7 +235,6 @@ async def on_draw_op(sid: str, data: Any) -> None:
 
 
 async def on_canvas_state(sid: str, data: dict) -> None:
-    """Persists current canvas state to the database."""
     from .models import Room
     session = await sio.get_session(sid)
     room_id = session.get('room_id')
@@ -218,7 +250,6 @@ async def on_canvas_state(sid: str, data: dict) -> None:
 
 
 async def on_cursor_move(sid: str, data: dict) -> None:
-    """Broadcasts remote cursor movements to other users."""
     session = await sio.get_session(sid)
     room_id = session.get('room_id')
     if not room_id:
@@ -232,13 +263,12 @@ async def on_cursor_move(sid: str, data: dict) -> None:
 
 
 async def on_chat_message(sid: str, data: Any) -> None:
-    """Handles incoming chat messages and persists them."""
     from .models import ChatMessage
     if not isinstance(data, dict):
         return
     session = await sio.get_session(sid)
     room_id = session.get('room_id')
-    user_id = session.get('user_id')
+    auth_user_id = session.get('auth_user_id')
     username = session.get('username')
     message = str(data.get('message', ''))[:500]
     if not room_id or not message:
@@ -247,7 +277,7 @@ async def on_chat_message(sid: str, data: Any) -> None:
     try:
         await ChatMessage.objects.acreate(
             room_id=room_id,
-            user_id=user_id,
+            user_id=auth_user_id,
             username=username,
             message=message,
         )
@@ -255,7 +285,7 @@ async def on_chat_message(sid: str, data: Any) -> None:
         logger.error(f'[chat_message] DB insertion failed for room {room_id}: {e}', exc_info=True)
         return
     await sio.emit('chat_message', {
-        'userId': user_id,
+        'userId': str(auth_user_id),
         'username': username,
         'message': message,
         'time': timestamp_ms,
@@ -263,28 +293,26 @@ async def on_chat_message(sid: str, data: Any) -> None:
 
 
 async def on_brush_settings(sid: str, data: Any) -> None:
-    """Updates user-specific brush settings in the database."""
     from .models import BrushSettings
     if not isinstance(data, dict):
         return
     session = await sio.get_session(sid)
-    username = session.get('username')
+    auth_user_id = session.get('auth_user_id')
     settings = data.get('settings')
-    if not username or not isinstance(settings, dict):
+    if not auth_user_id or not isinstance(settings, dict):
         return
     if len(json_mod.dumps(settings)) > _MAX_BRUSH_JSON:
         return
     try:
         await BrushSettings.objects.aupdate_or_create(
-            username=username,
+            user_id=auth_user_id,
             defaults={'settings': settings},
         )
     except Exception as e:
-        logger.error(f'[brush_settings] DB upsert failed for user {username}: {e}', exc_info=True)
+        logger.error(f'[brush_settings] DB upsert failed for user {auth_user_id}: {e}', exc_info=True)
 
 
 async def on_disconnect(sid: str, reason: Optional[str] = None) -> None:
-    """Handles user disconnection, updating room state and notifying others."""
     from .models import Room
     session = await sio.get_session(sid)
     room_id = session.get('room_id')

@@ -5,13 +5,10 @@ import { ColorPicker } from './ui/ColorPicker';
 import { BrushPanel } from './ui/BrushPanel';
 import { RoomUI } from './ui/RoomUI';
 import { SocketClient } from './network/SocketClient';
+import { AuthClient, AuthUser } from './network/AuthClient';
 import { DrawOp, StrokeSettings, User, USER_COLORS } from './types';
 import { escapeHtml } from './utils';
 
-/**
- * The main entry point and orchestrator for the Oekaki Chat Neo application.
- * Manages the interaction between the Canvas engine, UI components, and Socket connectivity.
- */
 export class App {
   private engine!: CanvasEngine;
   private toolMgr = new ToolManager();
@@ -19,66 +16,31 @@ export class App {
   private brushPanel = new BrushPanel();
   private roomUI = new RoomUI();
   private socket = new SocketClient();
+  private auth = new AuthClient();
 
+  private currentUser: AuthUser | null = null;
   private currentColor: [number, number, number] = [0, 0, 0];
   private userId = '';
   private roomId = '';
   private users: (User & { color: string })[] = [];
   private canvasSyncTimer: number | null = null;
-
-  // Cursor throttle
   private lastCursorSent = 0;
 
   async init() {
     this.roomUI.init();
     this.brushPanel.init();
     this.setupTheme();
-    this.colorPicker.onChange = (r, g, b) => {
-      this.currentColor = [r, g, b];
-    };
-
-    // Default color = black
+    this.colorPicker.onChange = (r, g, b) => { this.currentColor = [r, g, b]; };
     this.colorPicker.setRGB(0, 0, 0);
 
-    this.roomUI.onCreateRoom = async (roomId, password, username) => {
-      let res: Response;
-      try {
-        res = await fetch('/api/rooms', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomId, password })
-        });
-      } catch {
-        this.roomUI.showError('サーバーに接続できませんでした');
-        return;
-      }
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        this.roomUI.showError(data.error ?? '部屋の作成に失敗しました');
-        return;
-      }
-      this.connectRoom(roomId, password, username);
-    };
-
-    this.roomUI.onJoinRoom = async (roomId, password, username) => {
-      this.connectRoom(roomId, password, username);
-    };
-
-    this.roomUI.onLeaveRoom = () => {
-      this.socket.disconnect();
-      window.location.reload();
-    };
-
+    this.setupRoomUIHandlers();
     this.setupSocket();
     this.setupKeyboard();
     this.setupMenu();
     this.setupChat();
     this.setupRightPanelToggle();
 
-    // Swap colors button
-    document.getElementById('swap-colors-btn')?.addEventListener('click', () => {
-      this.colorPicker.setRGB(255 - this.currentColor[0], 255 - this.currentColor[1], 255 - this.currentColor[2]);
-    });
+    document.getElementById('swap-colors-btn')?.addEventListener('click', () => { this.swapColors(); });
 
     // Selection actions
     document.getElementById('cut-btn')?.addEventListener('click', () => this.doCut());
@@ -95,15 +57,92 @@ export class App {
     document.getElementById('commit-transform-btn')?.addEventListener('click', () => this.doCommitTransform());
     document.getElementById('cancel-transform-btn')?.addEventListener('click', () => this.doCancelTransform());
 
-    // Tolerance slider
     const tolSlider = document.getElementById('select-tolerance') as HTMLInputElement;
     tolSlider?.addEventListener('input', () => {
       document.getElementById('select-tolerance-val')!.textContent = tolSlider.value;
     });
+
+    // Determine initial screen from auth state
+    this.currentUser = await this.auth.getMe();
+    if (this.currentUser) {
+      await this.showDashboard();
+    } else {
+      this.roomUI.showScreen('login');
+    }
   }
 
-  private connectRoom(roomId: string, password: string, username: string) {
-    this.socket.joinRoom(roomId, password, username);
+  private setupRoomUIHandlers() {
+    this.roomUI.onLogin = async (email, password) => {
+      try {
+        this.currentUser = await this.auth.login(email, password);
+        await this.showDashboard();
+      } catch (e: any) {
+        this.roomUI.showLoginError(e.message ?? 'ログインに失敗しました');
+      }
+    };
+
+    this.roomUI.onGoogleLogin = () => {
+      this.auth.startGoogleLogin();
+    };
+
+    this.roomUI.onLogout = async () => {
+      await this.auth.logout();
+      this.currentUser = null;
+      this.roomUI.showScreen('login');
+    };
+
+    this.roomUI.onCreateRoom = async (roomId, password) => {
+      let res: Response;
+      try {
+        res = await fetch('/api/rooms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ roomId, password })
+        });
+      } catch {
+        this.roomUI.showRoomError('サーバーに接続できませんでした');
+        return;
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        this.roomUI.showRoomError(data.error ?? '部屋の作成に失敗しました');
+        return;
+      }
+      this.connectRoom(roomId, password);
+    };
+
+    this.roomUI.onJoinRoom = async (roomId, password) => {
+      this.connectRoom(roomId, password);
+    };
+
+    this.roomUI.onLeaveRoom = () => {
+      this.socket.disconnect();
+      window.location.reload();
+    };
+  }
+
+  private async showDashboard() {
+    if (this.currentUser) {
+      this.roomUI.setDashboardUser(this.currentUser.username);
+    }
+    this.roomUI.showScreen('dashboard');
+    await this.fetchDashboardRooms();
+  }
+
+  private async fetchDashboardRooms() {
+    try {
+      const res = await fetch('/api/dashboard/rooms', { credentials: 'include' });
+      if (!res.ok) return;
+      const data = await res.json();
+      this.roomUI.renderRoomList(data.rooms ?? []);
+    } catch {
+      // Non-fatal: dashboard still usable without room list
+    }
+  }
+
+  private connectRoom(roomId: string, password: string) {
+    this.socket.joinRoom(roomId, password);
   }
 
   private setupSocket() {
@@ -118,13 +157,8 @@ export class App {
 
       this.showDrawScreen();
 
-      if (brushSettings) {
-        this.brushPanel.restoreAllBrushConfigs(brushSettings);
-      }
-
-      if (canvasState) {
-        this.engine.loadStateDataUrl(canvasState);
-      }
+      if (brushSettings) this.brushPanel.restoreAllBrushConfigs(brushSettings);
+      if (canvasState)   this.engine.loadStateDataUrl(canvasState);
 
       this.roomUI.setRoomInfo(roomId, users.length, 5);
       this.roomUI.updateUserList(this.users);
@@ -139,11 +173,11 @@ export class App {
     };
 
     this.socket.onRoomError = ({ message }) => {
-      this.roomUI.showError(message);
+      this.roomUI.showRoomError(message);
     };
 
     this.socket.onReconnectFailed = () => {
-      this.roomUI.showError('サーバーへの再接続に失敗しました。ページを再読み込みしてください。');
+      this.roomUI.showRoomError('サーバーへの再接続に失敗しました。ページを再読み込みしてください。');
     };
 
     this.socket.onUserJoined = (user) => {
@@ -160,7 +194,6 @@ export class App {
       this.roomUI.setRoomInfo(this.roomId, this.users.length, 5);
       this.roomUI.updateUserList(this.users);
       if (user) this.roomUI.addChatMessage('システム', `${user.name} が退室しました`, false);
-      // Remove remote cursor
       document.getElementById(`cursor-${id}`)?.remove();
     };
 
@@ -186,10 +219,7 @@ export class App {
     const wrapper = document.getElementById('canvas-wrapper')!;
     this.engine = new CanvasEngine(wrapper);
 
-    // Set up engine callbacks
-    this.engine.onColorPick = (r, g, b) => {
-      this.colorPicker.setRGB(r, g, b);
-    };
+    this.engine.onColorPick = (r, g, b) => { this.colorPicker.setRGB(r, g, b); };
 
     this.engine.onTransformUpdate = (angle) => {
       const angleLabel = document.getElementById('transform-angle-label');
@@ -198,11 +228,8 @@ export class App {
       }
     };
 
-    this.engine.selection.onSelectionChange = () => {
-      this.updateSelectionBar();
-    };
+    this.engine.selection.onSelectionChange = () => { this.updateSelectionBar(); };
 
-    // Tool manager
     this.toolMgr.init({
       engine: this.engine,
       getSettings: () => this.buildStrokeSettings(),
@@ -249,7 +276,6 @@ export class App {
       }
     });
 
-    // Throttled cursor broadcast
     document.getElementById('canvas-wrapper')!.addEventListener('pointermove', (e: PointerEvent) => {
       const now = Date.now();
       if (now - this.lastCursorSent < 50) return;
@@ -258,7 +284,6 @@ export class App {
       this.socket.emitCursorMove(cx, cy);
     });
 
-    // Tool buttons
     document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
       btn.addEventListener('click', () => {
         const tool = (btn as HTMLElement).dataset.tool as any;
@@ -270,7 +295,6 @@ export class App {
           pan: '手のひら', rectSelect: '矩形選択', lasso: '自由選択', eyedropper: 'スポイト'
         };
         document.getElementById('sb-tool')!.textContent = names[tool] || tool;
-
       });
     });
 
@@ -290,18 +314,12 @@ export class App {
     const customInput = document.getElementById('zoom-custom-input') as HTMLInputElement;
 
     const closeZoomDropdown = () => { dropdown.style.display = 'none'; };
-
-    const applyZoom = (percent: number) => {
-      this.engine?.setZoom(percent / 100);
-      closeZoomDropdown();
-    };
+    const applyZoom = (percent: number) => { this.engine?.setZoom(percent / 100); closeZoomDropdown(); };
 
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const isOpen = dropdown.style.display !== 'none';
       if (isOpen) { closeZoomDropdown(); return; }
-
-      // Highlight the closest preset to current zoom
       const cur = Math.round((this.engine?.currentZoom ?? 1) * 100);
       dropdown.querySelectorAll<HTMLElement>('[data-zoom]').forEach(el => {
         el.classList.toggle('current', +el.dataset.zoom! === cur);
@@ -312,21 +330,15 @@ export class App {
 
     document.addEventListener('click', closeZoomDropdown);
     dropdown.addEventListener('click', (e) => e.stopPropagation());
-
     dropdown.querySelectorAll<HTMLElement>('[data-zoom]').forEach(el => {
       el.addEventListener('click', () => applyZoom(+el.dataset.zoom!));
     });
-
     document.getElementById('zoom-custom-apply')!.addEventListener('click', () => {
       const v = +customInput.value;
       if (v >= 5 && v <= 2000) applyZoom(v);
     });
-
     customInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        const v = +customInput.value;
-        if (v >= 5 && v <= 2000) applyZoom(v);
-      }
+      if (e.key === 'Enter') { const v = +customInput.value; if (v >= 5 && v <= 2000) applyZoom(v); }
       e.stopPropagation();
     });
   }
@@ -373,16 +385,8 @@ export class App {
         return;
       }
 
-      if (key === 'enter' && this.engine?.selection.isTransforming) {
-        e.preventDefault();
-        this.doCommitTransform();
-        return;
-      }
-      if (key === 'escape' && this.engine?.selection.isTransforming) {
-        e.preventDefault();
-        this.doCancelTransform();
-        return;
-      }
+      if (key === 'enter' && this.engine?.selection.isTransforming) { e.preventDefault(); this.doCommitTransform(); return; }
+      if (key === 'escape' && this.engine?.selection.isTransforming) { e.preventDefault(); this.doCancelTransform(); return; }
 
       const toolMap: Record<string, string> = {
         b: 'brush', e: 'eraser', g: 'fill',
@@ -443,18 +447,15 @@ export class App {
   private setupChat() {
     const input = document.getElementById('chat-input') as HTMLInputElement;
     const sendBtn = document.getElementById('chat-send-btn')!;
-
-    const sendChatMessage = () => {
+    const send = () => {
       const msg = input.value.trim();
       if (!msg) return;
       this.socket.emitChatMessage(msg);
       input.value = '';
     };
-
-    sendBtn.addEventListener('click', sendChatMessage);
+    sendBtn.addEventListener('click', send);
     input.addEventListener('keydown', (e) => {
-      // isComposing チェックで IME 変換中の Enter を送信に使わないようにする
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChatMessage(); }
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     });
   }
 
@@ -474,11 +475,8 @@ export class App {
   private setupRightPanelToggle() {
     const wrap = document.getElementById('right-panel-wrap')!;
     const btn  = document.getElementById('right-panel-toggle')!;
-
-    // Restore saved state from cookie
     const collapsed = document.cookie.match(/(?:^|; )oekaki_panel_collapsed=([^;]*)/)?.[1] === '1';
     if (collapsed) wrap.classList.add('collapsed');
-
     btn.addEventListener('click', () => {
       const isNowCollapsed = wrap.classList.toggle('collapsed');
       const exp = new Date(Date.now() + 365 * 86400000).toUTCString();
@@ -488,9 +486,7 @@ export class App {
 
   // ── Selection actions ──────────────────────────────────────────────────────
 
-  private doCopy() {
-    this.engine?.selection.copy(this.engine.mainCtx);
-  }
+  private doCopy() { this.engine?.selection.copy(this.engine.mainCtx); }
 
   private doCut() {
     if (!this.engine?.selection.hasSelection) return;
@@ -501,20 +497,15 @@ export class App {
 
   private doPaste() {
     if (!this.engine?.selection.hasClipboard()) return;
-
-    // Commit any in-progress transform before starting a new paste
     if (this.engine.selection.isTransforming) {
       this.engine.saveUndo();
       this.engine.selection.commitTransform(this.engine.mainCtx);
       this.socket.emitCanvasState(this.engine.getStateDataUrl());
     }
-
     this.engine.saveUndo();
     const cb = this.engine.selection.getClipboard();
     if (!cb) return;
     this.engine.selection.pasteAsTransform(cb.dataUrl, cb.w, cb.h, this.engine.mainCtx);
-
-    // Switch to rectSelect so transform handles are interactive
     this.switchTool('rectSelect');
   }
 
@@ -537,11 +528,7 @@ export class App {
     if (!this.engine) return;
     this.engine.selection.setMode('rect');
     this.engine.selection.startRect(0, 0);
-    this.engine.selection.updateRect(
-      this.engine.mainCanvas.width,
-      this.engine.mainCanvas.height,
-      0, 0
-    );
+    this.engine.selection.updateRect(this.engine.mainCanvas.width, this.engine.mainCanvas.height, 0, 0);
     this.engine.selection.commitRect();
   }
 
@@ -551,13 +538,9 @@ export class App {
     const normal = document.getElementById('sel-normal');
     const transform = document.getElementById('sel-transform');
     if (!bar || !normal || !transform || !sel) return;
-
-    const hasSelection = sel.hasSelection;
-    const isTransforming = sel.isTransforming;
-
-    bar.style.display = hasSelection ? '' : 'none';
-    normal.style.display = hasSelection && !isTransforming ? '' : 'none';
-    transform.style.display = isTransforming ? '' : 'none';
+    bar.style.display = sel.hasSelection ? '' : 'none';
+    normal.style.display = sel.hasSelection && !sel.isTransforming ? '' : 'none';
+    transform.style.display = sel.isTransforming ? '' : 'none';
   }
 
   private doEnterTransform() {
@@ -579,8 +562,7 @@ export class App {
 
   private swapColors() {
     const [r, g, b] = this.currentColor;
-    const complement: [number, number, number] = [255 - r, 255 - g, 255 - b];
-    this.colorPicker.setRGB(...complement);
+    this.colorPicker.setRGB(255 - r, 255 - g, 255 - b);
   }
 
   // ── Remote cursors ─────────────────────────────────────────────────────────
@@ -609,11 +591,8 @@ export class App {
   // ── Canvas state sync ──────────────────────────────────────────────────────
 
   private startCanvasSync() {
-    // Sync every 30 seconds
     this.canvasSyncTimer = window.setInterval(() => {
-      if (this.engine) {
-        this.socket.emitCanvasState(this.engine.getStateDataUrl());
-      }
+      if (this.engine) this.socket.emitCanvasState(this.engine.getStateDataUrl());
     }, 30_000);
   }
 }

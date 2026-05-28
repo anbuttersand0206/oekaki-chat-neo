@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>お絵描きチャット</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #111114; color: #d8d8e8;
+           display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .card { background: rgba(26,26,36,.9); border: 1px solid #42424e; border-radius: 12px;
+            padding: 36px 40px; max-width: 400px; width: 100%; text-align: center; }
+    h2 { color: #5b8fff; margin-bottom: 16px; }
+    p  { color: #8888a0; font-size: 14px; }
+    a  { color: #5b8fff; }
+    .error { color: #ff8080; background: rgba(255,80,80,.12); border: 1px solid rgba(255,80,80,.3);
+             border-radius: 5px; padding: 10px; margin-top: 16px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    {% block content %}{% endblock %}
+  </div>
+</body>
+</html>

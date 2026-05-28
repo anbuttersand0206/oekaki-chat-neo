@@ -47,8 +47,8 @@ export class SocketClient {
     this.socket.on('reconnect_failed',   () => this.onReconnectFailed?.());
   }
 
-  joinRoom(roomId: string, password: string, username: string) {
-    this.socket.emit('join_room', { roomId, password, username });
+  joinRoom(roomId: string, password: string) {
+    this.socket.emit('join_room', { roomId, password });
   }
 
   emitDrawOp(op: DrawOp) {

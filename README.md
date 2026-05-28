@@ -7,9 +7,9 @@
 
 ## スクリーンショット
 
-### ルーム画面
+### ログイン画面
 
-![お絵描きルーム選択画面](documents/screenshots/room-select.png)
+![ログイン画面](documents/screenshots/room-select.png)
 
 ### メイン描画画面
 
@@ -18,6 +18,16 @@
 ---
 
 ## 機能
+
+### 認証
+
+| 機能 | 詳細 |
+|------|------|
+| **メールアドレス＋パスワードでログイン** | 登録済みアカウントでログイン |
+| **Google アカウントでログイン / 新規登録** | Google SSO（django-allauth）でワンクリック登録＆ログイン |
+| **ダッシュボード** | ログイン後に過去参加した部屋の一覧を表示。カードをクリックすると部屋IDが自動入力される |
+
+> **注意**: Google SSO を利用するには `.env` に `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` の設定が必要です。設定方法は [Google SSO の設定](#google-sso-の設定) を参照してください。
 
 ### お絵描き
 
@@ -58,16 +68,17 @@
 | 色伸び | 0 – 100 % | **水彩 / 油彩専用** |
 
 各パラメータには **筆圧カーブ / 速度カーブ / ランダム量** を個別に設定できます（各カーブはアコーディオンで折りたたみ可能）。  
-ブラシの設定はブラシ種類ごとに **PostgreSQL**（ニックネームごとにグローバル保存）へ自動保存され、退室・再起動後も維持されます。
+ブラシの設定はブラシ種類ごとに **PostgreSQL**（ユーザーアカウントに紐付けてグローバル保存）へ自動保存され、退室・再起動後も維持されます。
 
 ### マルチユーザー
 
 | 機能 | 詳細 |
 |------|------|
-| **部屋作成** | 任意のID（英数字・`_`・`-` で 32 文字以内）とパスワード（8〜32 文字）で部屋を作成 |
-| **認証** | bcrypt でパスワードをハッシュ化、Socket.IO で入室認証 |
+| **部屋作成** | ダッシュボードから任意のID（英数字・`_`・`-` で 32 文字以内）とパスワード（8〜32 文字）で部屋を作成 |
+| **部屋認証** | bcrypt でパスワードをハッシュ化、Socket.IO で入室認証 |
+| **ユーザー認証** | Socket.IO 接続時にセッション Cookie を検証。未ログインの接続は拒否される |
 | **最大人数** | 1 部屋あたり 5 人まで |
-| **ニックネーム** | 20 文字以内 |
+| **ユーザー名** | ログインアカウントの登録名を自動使用（入力不要） |
 | **リアルタイム同期** | ストローク・塗りつぶし・貼り付けを他ユーザーにリアルタイム配信 |
 | **カーソル共有** | 他ユーザーのカーソル位置をキャンバス上に表示 |
 | **テキストチャット** | 部屋内チャット（500 文字以内）。メッセージは DB に保存され、再入室時に直近 50 件を復元 |
@@ -80,11 +91,11 @@
 
 | フェーズ | タイミング | 内容 |
 |----------|-----------|------|
-| **作成** | `POST /api/rooms` | パスワードを bcrypt でハッシュ化して登録 |
-| **入室** | Socket `join_room` | パスワード照合 → 成功すればキャンバス状態を新規参加者に送信 |
+| **作成** | `POST /api/rooms` | パスワードを bcrypt でハッシュ化して登録（ログイン必須） |
+| **入室** | Socket `join_room` | パスワード照合 → 成功すればキャンバス状態を新規参加者に送信。参加履歴を DB に記録 |
 | **キャンバス同期** | クライアントが 30 秒ごとに送信 | サーバーは最新の状態を 1 枚だけ保持 |
 | **退出** | Socket 切断時 | 参加者リストから除外、他ユーザーへ通知 |
-| **削除** | 最後の 1 人が退出してから **30 分後** | バックグラウンドの定期クリーンアップ（5 分ごと）が DB をチェックし削除。チャット履歴・ブラシ設定も CASCADE で削除される |
+| **削除** | 最後の 1 人が退出してから **30 分後** | バックグラウンドの定期クリーンアップ（5 分ごと）が DB をチェックし削除。チャット履歴も CASCADE で削除される |
 | **再起動時** | サーバー再起動時 | 30 分以上空室だった部屋を起動時にクリーンアップ。それ以外は保持される |
 
 > **注意**: 部屋が削除されると描いた内容も失われます。大切な絵は「ファイル → PNG で保存」で手元に残してください。
@@ -150,7 +161,7 @@
 
 ## 表示設定
 
-- メニューバー右端（または部屋入室前の画面右上）の **☀ / 🌙** ボタンでライト / ダークを切り替え  
+- 各画面右上の **☀ / 🌙** ボタンでライト / ダークを切り替え  
   設定は `localStorage` に保存され、次回起動時も維持される
 - 右パネル右端の **◀ / ▶** ボタン（または `P` キー）でカラー・ブラシパネルを折りたたみ可能  
   折りたたみ状態は Cookie に保存される
@@ -170,13 +181,17 @@ graph TB
     Browser(["ブラウザ"])
 
     subgraph Infra["インフラ (Docker)"]
-        Nginx["nginx :80\n静的ファイル配信\n/api, /socket.io → proxy"]
-        Django["Django :3001\npython-socketio / uvicorn\nbcrypt / Django ORM"]
-        PG[("PostgreSQL :5432\n部屋・キャンバス・ブラシ設定\nvolume: pgdata")]
+        Nginx["nginx :80\n静的ファイル配信\n/api, /accounts, /socket.io → proxy\nCookie 転送あり"]
+        Django["Django :3001\npython-socketio / uvicorn\nbcrypt / django-allauth / Django ORM"]
+        PG[("PostgreSQL :5432\nuser・room・canvas・brush\nvolume: pgdata")]
     end
 
     subgraph FE["フロントエンド内部"]
         AppTS["app.ts — メインコントローラー"]
+
+        subgraph AuthSub["Auth"]
+            AC["AuthClient\nlogin / logout / getMe\nGoogle SSO start"]
+        end
 
         subgraph CanvasSub["Canvas"]
             CE["CanvasEngine\nzoom · pan · undo/redo · export"]
@@ -195,14 +210,15 @@ graph TB
             CP["ColorPicker"]
             BP["BrushPanel + BrushStorage"]
             CuE["CurveEditor"]
-            RU["RoomUI"]
+            RU["RoomUI\nlogin / dashboard / draw"]
         end
     end
 
     Browser -->|HTTP| Nginx
-    Nginx -->|proxy| Django
+    Nginx -->|proxy + Cookie| Django
     Django <-->|ORM| PG
 
+    AppTS --> AC
     AppTS --> CE
     AppTS --> SC
     AppTS --> CP
@@ -267,6 +283,7 @@ cd oekaki-chat-neo
 # 環境変数ファイルを作成
 cp .env.example .env
 # .env を編集して POSTGRES_PASSWORD / DJANGO_SECRET_KEY を設定
+# Google SSO を使う場合は GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET も設定（後述）
 
 # ビルドして起動
 docker compose up --build
@@ -294,11 +311,11 @@ pip install -r requirements.txt
 
 export PGHOST=localhost PGDATABASE=oekaki PGUSER=oekaki PGPASSWORD=your_password
 export DJANGO_SECRET_KEY=dev-secret
+export DEBUG=true
 
 python manage.py migrate
-python manage.py runserver 3001   # 開発サーバー（Socket.IO 非対応）
-# Socket.IO も使う場合:
-# uvicorn oekaki.asgi:application --host 0.0.0.0 --port 3001
+# Socket.IO も使う場合（推奨）:
+uvicorn oekaki.asgi:application --host 0.0.0.0 --port 3001
 
 # フロントエンド（別ターミナル）
 cd frontend
@@ -307,7 +324,47 @@ npm run dev
 # → http://localhost:5173
 ```
 
-Vite の dev proxy が `/api` と `/socket.io` を自動的にバックエンドへ転送します。
+Vite の dev proxy が `/api`・`/accounts`・`/socket.io` を自動的にバックエンドへ転送します。
+
+### 最初のユーザーを作成する
+
+Docker 起動後（またはローカル開発時）、Django 管理コマンドでアカウントを作成できます。
+
+```bash
+# Docker の場合
+docker compose exec backend python manage.py createsuperuser
+
+# ローカルの場合
+cd backend
+python manage.py createsuperuser
+```
+
+メールアドレス・ユーザー名・パスワードを入力すると管理者アカウントが作成されます。  
+作成後は `http://localhost:8080` のログイン画面からそのアカウントでログインできます。
+
+---
+
+## Google SSO の設定
+
+Google SSO（Googleでログイン / 新規登録）を利用するには、Google Cloud Console での設定が必要です。
+
+1. [Google Cloud Console](https://console.cloud.google.com/) を開く
+2. **「APIとサービス」→「認証情報」** に移動
+3. **「認証情報を作成」→「OAuth クライアント ID」** を選択
+4. アプリケーション種類: **ウェブアプリケーション**
+5. **「承認済みのリダイレクト URI」** に以下を追加:
+   - 開発環境: `http://localhost:8080/accounts/google/login/callback/`
+   - 本番環境: `https://your-domain.com/accounts/google/login/callback/`
+6. 発行された **クライアントID** と **クライアントシークレット** を `.env` に設定:
+
+```
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+```
+
+7. `docker compose up --build` で再起動
+
+> Google SSO を設定しない場合でも、メールアドレス＋パスワードでのログインは利用可能です。
 
 ---
 
@@ -337,9 +394,11 @@ docker compose exec postgres psql -U oekaki -d oekaki
 
 ```sql
 \dt                                -- テーブル一覧
+SELECT * FROM accounts_user;       -- ユーザー一覧
 SELECT * FROM rooms_room;          -- 部屋一覧
 SELECT * FROM rooms_brushsettings; -- ブラシ設定
 SELECT * FROM rooms_chatmessage;   -- チャット履歴
+SELECT * FROM rooms_userroom;      -- 参加履歴
 \q                                 -- 終了
 ```
 
@@ -347,21 +406,30 @@ SELECT * FROM rooms_chatmessage;   -- チャット履歴
 
 ## 使い方
 
-### 1. 部屋を作る
+### 1. アカウントを作成 / ログインする
 
-1. アプリを開くとルーム画面が表示される
-2. **「部屋を作る」** タブを選択
-3. 部屋 ID（英数字・`_`・`-` で 32 文字以内、例: `my-room`）とパスワード（8〜32 文字）、ニックネーム（20 文字以内）を入力
-4. **「作成して入る」** をクリック
+1. `http://localhost:8080` を開くとログイン画面が表示される
+2. **メールアドレス＋パスワード** を入力して「ログイン」、または  
+   **「Google でログイン / 新規登録」** をクリック
+3. ログイン成功後、ダッシュボードへ遷移する
 
-### 2. 部屋に入る
+> はじめてのアカウントは `python manage.py createsuperuser` または Google SSO で作成してください。
 
-1. **「部屋に入る」** タブを選択
-2. 部屋 ID・パスワード・ニックネームを入力して **「入る」** をクリック
+### 2. 部屋を作る
+
+1. ダッシュボードの **「部屋を作る」** タブを選択
+2. 部屋 ID（英数字・`_`・`-` で 32 文字以内）とパスワード（8〜32 文字）を入力
+3. **「作成して入る」** をクリック
+4. ユーザー名はログインアカウントの登録名が自動的に使われる
+
+### 3. 部屋に入る
+
+1. ダッシュボードの **「部屋に入る」** タブを選択（または過去に参加した部屋カードをクリックで ID を自動入力）
+2. 部屋 ID・パスワードを入力して **「入る」** をクリック
 
 > 部屋は最大 5 人まで参加可能。満員の場合はエラーメッセージが表示されます。
 
-### 3. 描く
+### 4. 描く
 
 - 左ツールバーでツールを選択（またはショートカットキー）
 - 右パネルの **カラー** セクションで色を選択
@@ -371,14 +439,14 @@ SELECT * FROM rooms_chatmessage;   -- チャット履歴
 - 右パネル下部のチャット欄にメッセージを入力し、**送信ボタン**または **Enter**（日本語入力中は変換確定後に再度 Enter）で送信
 - 他ユーザーのメッセージは画面左下にトーストで通知される
 
-### 4. 選択範囲を変形する
+### 5. 選択範囲を変形する
 
 1. `M`（矩形選択）または `L`（自由選択）で範囲を指定
 2. ステータスバー上の選択バーから **「変形」** をクリック（または `Ctrl+T`）
 3. ハンドルをドラッグしてリサイズ・回転
 4. **「確定」** をクリック（または `Enter`）でキャンバスに合成
 
-### 5. 保存する
+### 6. 保存する
 
 - メニュー **ファイル → PNG で保存** または `Ctrl+S`
 - JPEG で保存する場合は **ファイル → JPEG で保存**
@@ -400,59 +468,69 @@ oekaki-chat-neo/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   ├── manage.py
+│   ├── templates/                # allauth 用最小 Django テンプレート
+│   │   ├── base.html
+│   │   ├── account/
+│   │   └── socialaccount/
 │   ├── oekaki/                   # Django プロジェクト
-│   │   ├── settings.py           # 設定（DB・CORS・SECRET_KEY を env から取得）
+│   │   ├── settings.py           # 設定（DB・CORS・認証・SECRET_KEY を env から取得）
 │   │   ├── urls.py
 │   │   └── asgi.py               # uvicorn エントリポイント（Socket.IO + Django 合成）
-│   └── rooms/                    # Django アプリ
-│       ├── models.py             # Room / BrushSettings / ChatMessage ORM モデル
-│       ├── views.py              # REST API（/health, /api/rooms）
+│   ├── accounts/                 # 認証アプリ
+│   │   ├── models.py             # カスタムユーザーモデル（AbstractUser 継承）
+│   │   ├── views.py              # POST /api/auth/login・logout、GET /api/auth/me
+│   │   ├── urls.py
+│   │   └── migrations/
+│   └── rooms/                    # お絵描きアプリ
+│       ├── models.py             # Room / BrushSettings / ChatMessage / UserRoom
+│       ├── views.py              # REST API（/api/rooms, /api/dashboard/rooms）
 │       ├── urls.py
-│       ├── sockets.py            # Socket.IO 全イベントハンドラー
-│       ├── apps.py               # 起動時の古い部屋クリーンアップ
-│       └── migrations/           # Django マイグレーション
+│       ├── sockets.py            # Socket.IO 全イベントハンドラー（セッション認証含む）
+│       ├── apps.py
+│       └── migrations/
 │
 ├── brushwasm/                    # C++17 ブラシエンジン (Wasm)
-│   ├── Makefile                  # em++ でビルド → frontend/public/ へ出力
+│   ├── Makefile
 │   └── src/
-│       ├── brush_engine.h        # エンジン API・構造体定義
-│       ├── brush_engine.cpp      # 全ブラシアルゴリズム実装
-│       └── wasm_exports.cpp      # Emscripten エクスポート関数
+│       ├── brush_engine.h
+│       ├── brush_engine.cpp
+│       └── wasm_exports.cpp
 │
 └── frontend/                     # Vite + TypeScript
     ├── Dockerfile
-    ├── nginx.conf
+    ├── nginx.conf                # /api・/accounts・/socket.io をプロキシ（Cookie 転送あり）
     ├── package.json
     ├── tsconfig.json
     ├── vite.config.ts
     ├── index.html
     ├── public/
-    │   ├── favicon.svg           # ブラウザタブアイコン
-    │   ├── favicon-32.png        # SVG 非対応ブラウザ向けフォールバック
-    │   ├── apple-touch-icon.png  # iOS ホーム画面アイコン (180×180)
-    │   ├── theme-init.js         # テーマ（ライト/ダーク）を body 描画前に適用
-    │   ├── wasm-loader.js        # Wasm バイナリの存在確認後に brush_engine.js を動的ロード
-    │   ├── brush_engine.js       # Emscripten 生成ローダー
-    │   └── brush_engine.wasm     # コンパイル済み Wasm バイナリ
+    │   ├── favicon.svg
+    │   ├── favicon-32.png
+    │   ├── apple-touch-icon.png
+    │   ├── theme-init.js
+    │   ├── wasm-loader.js
+    │   ├── brush_engine.js
+    │   └── brush_engine.wasm
     └── src/
-        ├── main.ts               # エントリポイント
-        ├── app.ts                # メインコントローラー
-        ├── types.ts              # 型定義
-        ├── utils.ts              # 共通ユーティリティ（XSS エスケープ等）
+        ├── main.ts
+        ├── app.ts                # メインコントローラー（認証フロー・ダッシュボード含む）
+        ├── types.ts
+        ├── utils.ts
         ├── canvas/
-        │   ├── BrushEngine.ts    # TS ブラシエンジン（Wasm フォールバック）
-        │   ├── WasmBrushEngine.ts# Wasm ラッパー・エンジン選択
-        │   ├── CanvasEngine.ts   # zoom・pan・undo・export
-        │   ├── FloodFill.ts      # スキャンライン塗りつぶし
-        │   ├── Selection.ts      # 矩形/ラッソ選択・変形・クリップボード
-        │   └── Tools.ts          # 全ツール実装
+        │   ├── BrushEngine.ts
+        │   ├── WasmBrushEngine.ts
+        │   ├── CanvasEngine.ts
+        │   ├── FloodFill.ts
+        │   ├── Selection.ts
+        │   └── Tools.ts
         ├── ui/
-        │   ├── ColorPicker.ts    # HSV 色相環 + 入力フォーム
-        │   ├── BrushPanel.ts     # ブラシ設定 UI
-        │   ├── BrushStorage.ts   # ブラシ設定シリアライズ（Cookie 廃止・DB 保存）
-        │   ├── CurveEditor.ts    # 筆圧/速度カーブエディター
-        │   └── RoomUI.ts         # 部屋作成/入室フォーム
+        │   ├── ColorPicker.ts
+        │   ├── BrushPanel.ts
+        │   ├── BrushStorage.ts
+        │   ├── CurveEditor.ts
+        │   └── RoomUI.ts         # ログイン・ダッシュボード・描画画面の UI
         ├── network/
+        │   ├── AuthClient.ts     # ログイン / ログアウト / Google SSO API クライアント
         │   └── SocketClient.ts   # Socket.IO クライアント
         └── styles/
             └── main.css          # ライト/ダーク テーマ対応 CSS
@@ -460,18 +538,42 @@ oekaki-chat-neo/
 
 ---
 
+## API エンドポイント一覧
+
+### 認証
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| `GET` | `/api/auth/me` | ログイン中のユーザー情報を返す（未ログイン時は 401） |
+| `POST` | `/api/auth/login` | メールアドレス＋パスワードでログイン |
+| `POST` | `/api/auth/logout` | ログアウト（セッション削除） |
+| `GET` | `/accounts/google/login/` | Google SSO フロー開始（allauth） |
+
+### ダッシュボード / 部屋
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| `GET` | `/api/dashboard/rooms` | ログインユーザーが過去参加した部屋一覧（要ログイン） |
+| `POST` | `/api/rooms` | 部屋を作成（要ログイン） |
+| `GET` | `/api/rooms/<room_id>` | 部屋の基本情報（人数など）を取得 |
+| `GET` | `/health` | ヘルスチェック |
+
+---
+
 ## Socket.IO イベント一覧
+
+> Socket.IO 接続時にセッション Cookie を検証します。未ログインの場合は接続が拒否されます。
 
 | イベント | 方向 | 説明 |
 |---------|------|------|
-| `join_room` | C → S | 部屋入室リクエスト |
+| `join_room` | C → S | 部屋入室リクエスト（`roomId`・`password`、ユーザー名はセッションから自動取得） |
 | `room_joined` | S → C | 入室成功、ユーザー一覧・キャンバス状態・ブラシ設定・チャット履歴（直近 50 件）を返す |
 | `room_error` | S → C | 入室失敗（満員・認証エラーなど） |
 | `user_joined` | S → C | 他ユーザーの入室通知 |
 | `user_left` | S → C | 他ユーザーの退室通知 |
 | `draw_op` | C ↔ S ↔ C | 描画操作（stroke / fill / clear / paste） |
 | `canvas_state` | C → S | キャンバス全体の PNG データ（定期同期） |
-| `brush_settings` | C → S | ブラシ設定の保存（部屋・ニックネームごとに DB へ upsert） |
+| `brush_settings` | C → S | ブラシ設定の保存（ユーザーアカウントに紐付けて DB へ upsert） |
 | `cursor_move` | C ↔ S ↔ C | カーソル位置の共有 |
 | `chat_message` | C ↔ S ↔ C | テキストチャット（DB 保存後に同室全員へ配信） |
 
@@ -482,6 +584,7 @@ oekaki-chat-neo/
 | 分類 | 技術 |
 |------|------|
 | バックエンド | Python 3.12, Django 5, python-socketio, uvicorn, bcrypt |
+| 認証 | django-allauth（メール＋パスワード / Google SSO） |
 | ORM / DB | Django ORM, PostgreSQL 16 |
 | フロントエンド | TypeScript, Vite, Canvas 2D API |
 | ブラシエンジン | C++17 (WebAssembly / Emscripten)、TypeScript フォールバック |

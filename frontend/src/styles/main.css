@@ -47,7 +47,9 @@
     0 0 / 20px 20px;
 }
 
-[data-theme="light"] #room-screen {
+[data-theme="light"] #room-screen,
+[data-theme="light"] #login-screen,
+[data-theme="light"] #dashboard-screen {
   background: radial-gradient(ellipse at 30% 40%, #d4ddf8 0%, #eaeaf8 60%);
 }
 
@@ -119,7 +121,168 @@ html, body {
 .screen { display: none; width: 100%; height: 100%; }
 .screen.active { display: flex; flex-direction: column; }
 
-/* ── Room Screen ── */
+/* ── Login Screen ── */
+#login-screen {
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 30% 40%, #1a1a3a 0%, #0f0f18 60%);
+  position: relative;
+}
+
+#theme-toggle-login {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+}
+
+[data-theme="light"] #login-screen {
+  background: radial-gradient(ellipse at 30% 40%, #d4ddf8 0%, #eaeaf8 60%);
+}
+
+/* Google SSO button */
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px;
+  color: var(--text2);
+  font-size: 11px;
+}
+.auth-divider::before, .auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.google-btn {
+  width: 100%;
+  padding: 9px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  transition: background .15s, border-color .15s;
+}
+.google-btn:hover { background: var(--bg-hover); border-color: var(--accent); }
+
+/* ── Dashboard Screen ── */
+#dashboard-screen {
+  background: radial-gradient(ellipse at 30% 40%, #1a1a3a 0%, #0f0f18 60%);
+  position: relative;
+  overflow-y: auto;
+}
+
+[data-theme="light"] #dashboard-screen {
+  background: radial-gradient(ellipse at 30% 40%, #d4ddf8 0%, #eaeaf8 60%);
+}
+
+.dashboard-layout {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 0 24px 40px;
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0 20px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+
+.dashboard-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dashboard-username-label {
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.outline-btn {
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  color: var(--text2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.outline-btn:hover { background: var(--bg-hover); color: var(--text); }
+
+.dashboard-body {
+  display: flex;
+  gap: 32px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.dashboard-section {
+  flex: 1;
+  min-width: 240px;
+}
+
+.dashboard-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text2);
+  margin-bottom: 12px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.dashboard-form-card {
+  width: 340px;
+  flex-shrink: 0;
+}
+
+.room-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.room-card:hover { background: var(--bg-hover); border-color: var(--accent); }
+
+.room-card-id {
+  font-size: 13px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.room-card-count {
+  font-size: 11px;
+  color: var(--text2);
+}
+
+.room-list-empty {
+  font-size: 12px;
+  color: var(--text2);
+  padding: 12px 0;
+}
+
+/* ── (Legacy) Room Screen — kept for backward-compat selectors ── */
 #room-screen {
   align-items: center;
   justify-content: center;

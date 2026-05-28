@@ -4,3 +4,4 @@ python-socketio[asyncio]>=5.11
 uvicorn>=0.30
 bcrypt>=4.1
 django-cors-headers>=4.3
+django-allauth[socialaccount]>=65.0

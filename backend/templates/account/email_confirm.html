@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>メールアドレスの確認</h2>
+{% if confirmation %}
+  <p>{{ confirmation.email_address.email }} を確認します。</p>
+  <form method="post">{% csrf_token %}
+    <button type="submit"
+      style="background:#5b8fff;color:#fff;border:none;border-radius:6px;padding:10px 20px;cursor:pointer;font-size:14px;margin-top:12px">
+      確認する
+    </button>
+  </form>
+{% else %}
+  <p class="error">この確認リンクは無効です。</p>
+{% endif %}
+<p style="margin-top:16px"><a href="/">トップページへ戻る</a></p>
+{% endblock %}

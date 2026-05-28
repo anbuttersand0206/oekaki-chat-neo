@@ -34,6 +34,9 @@ services:
       PGDATABASE: oekaki
       PGUSER: oekaki
       PGPASSWORD: ${POSTGRES_PASSWORD:-oekaki_secret}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-django.core.mail.backends.console.EmailBackend}
     depends_on:
       postgres:
         condition: service_healthy
