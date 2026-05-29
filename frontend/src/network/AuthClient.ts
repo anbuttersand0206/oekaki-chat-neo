@@ -4,6 +4,7 @@ export interface AuthUser {
   email: string;
   locale: string;
   timezone: string;
+  hasPassword: boolean;
 }
 
 export class AuthClient {
@@ -49,6 +50,35 @@ export class AuthClient {
       method: 'POST',
       credentials: 'include',
     });
+  }
+
+  async updateMe(changes: {
+    username?: string;
+    email?: string;
+    currentPassword?: string;
+    newPassword?: string;
+  }): Promise<AuthUser> {
+    const res = await fetch('/api/auth/me', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(changes),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error ?? '更新に失敗しました');
+    return body.user;
+  }
+
+  async deleteMe(password?: string): Promise<void> {
+    const res = await fetch('/api/auth/me', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      // Google SSO ユーザーはパスワード不要なので undefined のまま送らない
+      body: JSON.stringify(password ? { password } : {}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? '退会に失敗しました');
   }
 
   startGoogleLogin(): void {

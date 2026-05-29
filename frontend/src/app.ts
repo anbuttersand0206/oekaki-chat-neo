@@ -95,6 +95,26 @@ export class App {
       this.roomUI.showScreen('login');
     };
 
+    // 設定・退会画面へ遷移する前にフォームの現在値を最新の状態に揃える
+    this.roomUI.onGoToSettings = () => {
+      if (this.currentUser) {
+        this.roomUI.fillAccountSettings(this.currentUser.username, this.currentUser.email);
+      }
+      this.roomUI.showScreen('settings');
+    };
+
+    this.roomUI.onGoToDeactivate = () => {
+      if (this.currentUser) {
+        this.roomUI.setupDeactivateForm(this.currentUser.hasPassword);
+      }
+      this.roomUI.showScreen('deactivate');
+    };
+
+    this.roomUI.onGoToDashboard = () => {
+      // ダッシュボードへ戻る際も最新の部屋一覧を取得する
+      void this.showDashboard();
+    };
+
     this.roomUI.onSignup = async (username, email, password) => {
       try {
         this.currentUser = await this.auth.register(username, email, password);
@@ -102,6 +122,40 @@ export class App {
         await this.showDashboard();
       } catch (e: any) {
         this.roomUI.showSignupError(e.message ?? '登録に失敗しました');
+      }
+    };
+
+    this.roomUI.onUpdateProfile = async (username, email) => {
+      try {
+        this.currentUser = await this.auth.updateMe({ username, email });
+        // 成功後はヘッダーと設定フォームを更新値で上書きする
+        this.roomUI.setDashboardUser(this.currentUser.username);
+        this.roomUI.fillAccountSettings(this.currentUser.username, this.currentUser.email);
+        this.roomUI.showSettingsSuccess('profile', '変更を保存しました');
+      } catch (e: any) {
+        this.roomUI.showSettingsError('profile', e.message ?? '変更に失敗しました');
+      }
+    };
+
+    this.roomUI.onUpdatePassword = async (currentPassword, newPassword) => {
+      try {
+        await this.auth.updateMe({ currentPassword, newPassword });
+        // 成功後はパスワードフォームをクリアして再利用しやすくする
+        this.roomUI.clearPasswordForm();
+        this.roomUI.showSettingsSuccess('password', 'パスワードを変更しました');
+      } catch (e: any) {
+        this.roomUI.showSettingsError('password', e.message ?? 'パスワードの変更に失敗しました');
+      }
+    };
+
+    this.roomUI.onDeactivate = async (password) => {
+      try {
+        await this.auth.deleteMe(password || undefined);
+        // 退会完了 → セッションが消えているためログイン画面へ遷移する
+        this.currentUser = null;
+        this.roomUI.showScreen('login');
+      } catch (e: any) {
+        this.roomUI.showDeactivateError(e.message ?? '退会に失敗しました');
       }
     };
 
@@ -145,6 +199,10 @@ export class App {
   private async showDashboard() {
     if (this.currentUser) {
       this.roomUI.setDashboardUser(this.currentUser.username);
+      // 設定フォームに現在値を入れる（ダッシュボード表示のたびに最新値で上書き）
+      this.roomUI.fillAccountSettings(this.currentUser.username, this.currentUser.email);
+      // パスワードの有無に応じて退会フォームのパスワード欄を出し分ける
+      this.roomUI.setupDeactivateForm(this.currentUser.hasPassword);
     }
     this.roomUI.showScreen('dashboard');
     await this.fetchDashboardRooms();
@@ -153,11 +211,15 @@ export class App {
   private async fetchDashboardRooms() {
     try {
       const res = await fetch('/api/dashboard/rooms', { credentials: 'include' });
-      if (!res.ok) return;
+      if (!res.ok) {
+        this.roomUI.showRoomListError('部屋一覧の取得に失敗しました');
+        return;
+      }
       const data = await res.json();
       this.roomUI.renderRoomList(data.rooms ?? []);
     } catch {
-      // 失敗してもダッシュボード自体は使えるので握りつぶす
+      // ネットワーク障害時もダッシュボード自体は使えるのでエラー表示にとどめる
+      this.roomUI.showRoomListError('サーバーに接続できませんでした');
     }
   }
 

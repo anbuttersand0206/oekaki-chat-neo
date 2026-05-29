@@ -2,7 +2,7 @@ import json
 import logging
 import re
 
-from django.contrib.auth import authenticate, get_user_model, login, logout
+from django.contrib.auth import authenticate, get_user_model, login, logout, update_session_auth_hash
 from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
@@ -18,6 +18,7 @@ _MAX_USERNAME_LEN = 20
 def _serialize_user(user) -> dict:
     """User オブジェクトをクライアントへ返すレスポンス形式に変換する。
     フィールドを一か所に集約することで、レスポンス形式の変更が各ビューに波及しない。
+    hasPassword: Google SSO のみのユーザーはパスワードが設定されていないため false になる。
     """
     return {
         'id': user.id,
@@ -25,7 +26,19 @@ def _serialize_user(user) -> dict:
         'email': user.email,
         'locale': user.locale,
         'timezone': user.timezone,
+        'hasPassword': user.has_usable_password(),
     }
+
+
+def _validate_username(username: str) -> str | None:
+    """ユーザー名のバリデーション。問題があればエラー文字列を返す。
+    登録・プロフィール更新の両方で同じルールを使うため関数に抽出している。
+    """
+    if not _MIN_USERNAME_LEN <= len(username) <= _MAX_USERNAME_LEN:
+        return f'ユーザー名は{_MIN_USERNAME_LEN}文字以上{_MAX_USERNAME_LEN}文字以内です'
+    if not re.match(r'^[a-zA-Z0-9_\-]+$', username):
+        return 'ユーザー名は英数字・アンダースコア・ハイフンのみ使用できます'
+    return None
 
 
 @csrf_exempt
@@ -46,17 +59,9 @@ def register_view(request: HttpRequest) -> JsonResponse:
     if not username or not email or not password:
         return JsonResponse({'error': 'すべての項目を入力してください'}, status=400)
 
-    if not _MIN_USERNAME_LEN <= len(username) <= _MAX_USERNAME_LEN:
-        return JsonResponse(
-            {'error': f'ユーザー名は{_MIN_USERNAME_LEN}文字以上{_MAX_USERNAME_LEN}文字以内です'},
-            status=400
-        )
-
-    if not re.match(r'^[a-zA-Z0-9_\-]+$', username):
-        return JsonResponse(
-            {'error': 'ユーザー名は英数字・アンダースコア・ハイフンのみ使用できます'},
-            status=400
-        )
+    username_error = _validate_username(username)
+    if username_error:
+        return JsonResponse({'error': username_error}, status=400)
 
     if not _MIN_PASSWORD_LEN <= len(password) <= _MAX_PASSWORD_LEN:
         return JsonResponse(
@@ -134,8 +139,124 @@ def logout_view(request: HttpRequest) -> JsonResponse:
     return JsonResponse({'ok': True})
 
 
-@require_GET
+@csrf_exempt
 def me_view(request: HttpRequest) -> JsonResponse:
+    """GET: 現在のユーザー情報を返す。PATCH: ユーザー情報を更新する。DELETE: アカウントを削除する。"""
+    if request.method == 'GET':
+        if not request.user.is_authenticated:
+            return JsonResponse({'error': 'ログインしてください'}, status=401)
+        return JsonResponse({'user': _serialize_user(request.user)})
+
+    if request.method == 'PATCH':
+        return _update_me(request)
+
+    if request.method == 'DELETE':
+        return _delete_me(request)
+
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+def _update_me(request: HttpRequest) -> JsonResponse:
+    """ユーザー情報の更新処理（me_view の PATCH ハンドラ）。"""
     if not request.user.is_authenticated:
         return JsonResponse({'error': 'ログインしてください'}, status=401)
-    return JsonResponse({'user': _serialize_user(request.user)})
+
+    try:
+        body = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({'error': 'リクエストが不正です'}, status=400)
+
+    user = request.user
+    User = get_user_model()
+    has_change = False
+
+    # ── ユーザー名の変更 ────────────────────────────────────────────────────────
+    if 'username' in body:
+        new_username = str(body['username']).strip()
+        error = _validate_username(new_username)
+        if error:
+            return JsonResponse({'error': error}, status=400)
+        if new_username != user.username:
+            if User.objects.filter(username=new_username).exclude(pk=user.pk).exists():
+                return JsonResponse({'error': 'このユーザー名はすでに使われています'}, status=409)
+            user.username = new_username
+            has_change = True
+
+    # ── メールアドレスの変更 ────────────────────────────────────────────────────
+    if 'email' in body:
+        # メールアドレスは大文字/小文字を区別しないため小文字に正規化する
+        new_email = str(body['email']).strip().lower()
+        if not new_email:
+            return JsonResponse({'error': 'メールアドレスを入力してください'}, status=400)
+        if new_email != user.email:
+            if User.objects.filter(email=new_email).exclude(pk=user.pk).exists():
+                return JsonResponse({'error': 'このメールアドレスはすでに登録されています'}, status=409)
+            user.email = new_email
+            has_change = True
+
+    # ── パスワードの変更 ────────────────────────────────────────────────────────
+    if 'newPassword' in body:
+        current_password = str(body.get('currentPassword', ''))
+        new_password = str(body['newPassword'])
+        # 本人確認のため現在のパスワードを要求する
+        if not user.check_password(current_password):
+            return JsonResponse({'error': '現在のパスワードが違います'}, status=400)
+        if not _MIN_PASSWORD_LEN <= len(new_password) <= _MAX_PASSWORD_LEN:
+            return JsonResponse(
+                {'error': f'新しいパスワードは{_MIN_PASSWORD_LEN}文字以上{_MAX_PASSWORD_LEN}文字以内です'},
+                status=400
+            )
+        user.set_password(new_password)
+        has_change = True
+
+    if not has_change:
+        return JsonResponse({'user': _serialize_user(user)})
+
+    try:
+        user.save()
+    except Exception as e:
+        logger.error(f'[update_me] ユーザー情報の更新に失敗しました: {e}', exc_info=True)
+        return JsonResponse({'error': '更新に失敗しました'}, status=500)
+
+    # パスワード変更後は Django のセッション認証ハッシュが変わり自動ログアウトしてしまう。
+    # update_session_auth_hash でセッションを更新してログイン状態を維持する。
+    if 'newPassword' in body:
+        update_session_auth_hash(request, user)
+
+    logger.info(f'ユーザー情報が更新されました: {user.email}')
+    return JsonResponse({'user': _serialize_user(user)})
+
+
+def _delete_me(request: HttpRequest) -> JsonResponse:
+    """アカウント削除処理（me_view の DELETE ハンドラ）。"""
+    if not request.user.is_authenticated:
+        return JsonResponse({'error': 'ログインしてください'}, status=401)
+
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, ValueError):
+        body = {}
+
+    user = request.user
+    email = user.email  # delete() 後に参照できなくなるため先に保持する
+
+    # パスワードを持つユーザーは本人確認のためパスワードを要求する。
+    # Google SSO のみのユーザーは has_usable_password() が False になるためスキップする。
+    if user.has_usable_password():
+        password = str(body.get('password', ''))
+        if not password:
+            return JsonResponse({'error': 'パスワードを入力してください'}, status=400)
+        if not user.check_password(password):
+            return JsonResponse({'error': 'パスワードが違います'}, status=400)
+
+    try:
+        # セッションを先に無効化してから削除する。
+        # 順序を逆にすると logout() がユーザー参照を使うため削除後に例外が出る。
+        logout(request)
+        user.delete()
+    except Exception as e:
+        logger.error(f'[delete_me] アカウント削除に失敗しました ({email}): {e}', exc_info=True)
+        return JsonResponse({'error': 'アカウントの削除に失敗しました'}, status=500)
+
+    logger.info(f'アカウントが削除されました: {email}')
+    return JsonResponse({'ok': True})
