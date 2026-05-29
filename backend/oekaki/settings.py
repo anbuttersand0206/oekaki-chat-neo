@@ -87,6 +87,8 @@ SESSION_ENGINE = 'django.contrib.sessions.backends.db'
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30日
+# スライディング・ウィンドウ方式: リクエストのたびに有効期限を SESSION_COOKIE_AGE 分延長する
+SESSION_SAVE_EVERY_REQUEST = True
 
 # ── django-allauth ────────────────────────────────────────────────────────────
 
