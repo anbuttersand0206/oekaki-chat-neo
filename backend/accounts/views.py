@@ -85,6 +85,14 @@ def register_view(request: HttpRequest) -> JsonResponse:
         logger.error(f'[register] ユーザー {email} の作成に失敗しました: {e}', exc_info=True)
         return JsonResponse({'error': 'アカウントの作成に失敗しました'}, status=500)
 
+    # TODO: メール認証を実装する（本番運用前に必須）
+    #   現状は登録直後にアカウントを即座に有効化している。
+    #   存在しないアドレスや他人のアドレスで登録できてしまうため、
+    #   確認メールを送信してリンクを踏んだ後に is_active=True へ切り替えるフローが必要。
+    #   対応方針: allauth の send_email_confirmation() を呼び出す、
+    #   または ACCOUNT_EMAIL_VERIFICATION='mandatory' に切り替えて
+    #   allauth 標準の登録フローに統一する。（README §TODO 参照）
+
     # 登録直後に自動ログインする（再入力の手間を省く）。
     # allauth のバックエンドを明示しないと login() が AUTHENTICATION_BACKENDS の
     # 設定を解決できずに AttributeError を起こすため、backend を指定している。

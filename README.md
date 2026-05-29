@@ -23,11 +23,14 @@
 
 | 機能 | 詳細 |
 |------|------|
+| **メールアドレス＋パスワードで新規会員登録** | ユーザー名・メールアドレス・パスワードで登録。登録直後に自動ログイン |
 | **メールアドレス＋パスワードでログイン** | 登録済みアカウントでログイン |
 | **Google アカウントでログイン / 新規会員登録** | Google SSO（django-allauth）でワンクリック登録＆ログイン |
 | **ダッシュボード** | ログイン後に過去参加した部屋の一覧を表示。カードをクリックすると部屋IDが自動入力される |
 
 > **注意**: Google SSO を利用するには `.env` に `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` の設定が必要です。設定方法は [Google SSO の設定](#google-sso-の設定) を参照してください。
+
+> **⚠️ TODO（セキュリティ）**: メールアドレス＋パスワードでの新規会員登録は、現在メール認証なしで即座にアカウントが作成されます。存在しないアドレスや他人のアドレスで登録できてしまうため、本番運用前にメール認証（登録確認メールの送信）を実装してください。詳細は [TODO / 今後の予定](#todo--今後の予定) を参照。
 
 ### お絵描き
 
@@ -409,11 +412,14 @@ SELECT * FROM rooms_userroom;      -- 参加履歴
 ### 1. アカウントを作成 / ログインする
 
 1. `http://localhost:8080` を開くとログイン画面が表示される
-2. **メールアドレス＋パスワード** を入力して「ログイン」、または  
+2. **新規会員登録の場合**: 「新規会員登録」リンクをクリックし、ユーザー名・メール・パスワードを入力して「登録する」をクリック
+3. **既存アカウントの場合**: **メールアドレス＋パスワード** を入力して「ログイン」、または  
    **「Google でログイン / 新規会員登録」** をクリック
-3. ログイン成功後、ダッシュボードへ遷移する
+4. ログイン成功後、ダッシュボードへ遷移する
 
-> はじめてのアカウントは `python manage.py createsuperuser` または Google SSO で作成してください。
+> **⚠️ 現在の制限**: メールアドレス＋パスワードでの新規会員登録にはメール認証が実装されていません。本番運用では登録確認メールの送信が必要です（[TODO / 今後の予定](#todo--今後の予定) 参照）。
+
+> 管理者アカウントを直接作成したい場合は `python manage.py createsuperuser` を使用してください。
 
 ### 2. 部屋を作る
 
@@ -545,6 +551,7 @@ oekaki-chat-neo/
 | メソッド | パス | 説明 |
 |---------|------|------|
 | `GET` | `/api/auth/me` | ログイン中のユーザー情報を返す（未ログイン時は 401） |
+| `POST` | `/api/auth/register` | 新規会員登録（ユーザー名・メール・パスワード）。成功時は自動ログイン ⚠️ メール認証なし |
 | `POST` | `/api/auth/login` | メールアドレス＋パスワードでログイン |
 | `POST` | `/api/auth/logout` | ログアウト（セッション削除） |
 | `GET` | `/accounts/google/login/` | Google SSO フロー開始（allauth） |
@@ -590,6 +597,32 @@ oekaki-chat-neo/
 | ブラシエンジン | C++17 (WebAssembly / Emscripten)、TypeScript フォールバック |
 | インフラ | Docker, Docker Compose, nginx |
 | 描画同期 | Socket.IO WebSocket |
+
+---
+
+## TODO / 今後の予定
+
+### ⚠️ 本番運用前に対応が必要な項目
+
+#### メール認証（新規会員登録）
+
+**現状**: `POST /api/auth/register` は入力検証と重複確認のみ行い、アカウントを即座に有効化する。  
+**問題**: 存在しないメールアドレスや他人のアドレスで登録できてしまう。  
+**対応方針**: 以下のいずれかを実装すること。
+
+- **方法 A — django-allauth の `EMAIL_VERIFICATION = 'mandatory'` を利用する**  
+  `settings.py` で `ACCOUNT_EMAIL_VERIFICATION = 'mandatory'` に変更し、allauth 標準の確認メール送信フローに乗せる。  
+  ただし現在の `register_view` は allauth の登録フローを使わず直接 `create_user` しているため、  
+  allauth の登録ビュー（`/accounts/signup/`）に統一するか、`register_view` 内で  
+  `allauth.account.utils.send_email_confirmation()` を呼び出す改修が必要。
+
+- **方法 B — 独自の確認メール送信を実装する**  
+  `register_view` 内でトークンを生成し確認メールを送信。  
+  `is_active=False` で仮登録 → メールのリンクで `is_active=True` に切り替えるフローを実装する。
+
+**関連コード**:
+- `backend/accounts/views.py` — `register_view`（TODO コメントあり）
+- `backend/oekaki/settings.py` — `ACCOUNT_EMAIL_VERIFICATION = 'optional'`（要変更）
 
 ---
 

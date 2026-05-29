@@ -93,6 +93,11 @@ SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30日
 ACCOUNT_EMAIL_REQUIRED = True
 ACCOUNT_USERNAME_REQUIRED = True
 ACCOUNT_AUTHENTICATION_METHOD = 'email'
+# TODO: 本番運用前に 'mandatory' へ変更してメール認証を必須にすること。
+#   'optional' のままでは /api/auth/register で登録したアカウントが
+#   メール確認なしで即座に有効化される。
+#   変更後は accounts/views.py の register_view も allauth の確認メール
+#   送信フローと整合させる必要がある。（README §TODO 参照）
 ACCOUNT_EMAIL_VERIFICATION = 'optional'
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'http' if DEBUG else 'https'
 
