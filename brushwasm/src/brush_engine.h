@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <vector>
 
-// ── Brush types ──────────────────────────────────────────────────────────────
+// ── ブラシ種別 ────────────────────────────────────────────────────────────────
 enum class BrushType : int {
     Pen=0, Marker=1, Pencil=2, Crayon=3, Airbrush=4,
     Watercolor=5, Oil=6, Pastel=7, Blur=8
@@ -16,8 +16,8 @@ enum class ParamId : int {
 struct CurvePt { float x, y; };
 
 struct ParamMod {
-    std::vector<CurvePt> pressure; // multiplier curve vs pressure 0-1
-    std::vector<CurvePt> speed;    // multiplier curve vs norm-speed 0-1
+    std::vector<CurvePt> pressure; // 筆圧 0-1 に対する乗数カーブ
+    std::vector<CurvePt> speed;    // 正規化速度 0-1 に対する乗数カーブ
     float random = 0.f;
 };
 
@@ -28,7 +28,7 @@ struct BrushCfg {
     float opacity     = 1.0f;
     float density     = 1.0f;
     float spacing     = 0.1f;
-    float hardness    = 0.8f;  // 0=soft 1=hard
+    float hardness    = 0.8f;  // 0=ソフト 1=ハード
     float mixing      = 0.5f;
     float water       = 0.5f;
     float spread      = 0.3f;
@@ -43,13 +43,14 @@ struct StrokeState {
     float dirX=1,dirY=0;
 };
 
-// ── Engine ────────────────────────────────────────────────────────────────────
-// Owns an internal RGBA canvas buffer.
-// Usage:
-//   1. ptr = getCanvasBuf(cw, ch)  — TS copies current canvas here
-//   2. beginStroke(...)            — snapshots canvas, inits state
-//   3. strokeTo(...)               — renders dabs into internal buffer
-//   4. read back from ptr (same pointer as step 1)
+// ── エンジン ──────────────────────────────────────────────────────────────────
+// 内部に RGBA キャンバスバッファを持つ。
+//
+// 使用手順:
+//   1. ptr = getCanvasBuf(cw, ch)  — TS がここに現在のキャンバスをコピーする
+//   2. beginStroke(...)            — キャンバスをスナップショット、状態を初期化
+//   3. strokeTo(...)               — ダブを内部バッファに描画
+//   4. ptr（手順1と同じポインタ）からデータを読み返す
 class BrushEngine {
 public:
     uint8_t* getCanvasBuf(int cw, int ch);
@@ -61,17 +62,17 @@ public:
 
 private:
     StrokeState s_;
-    std::vector<uint8_t> canvas_;    // live canvas (RGBA), always shows composite result
-    std::vector<uint8_t> preStroke_; // snapshot at stroke start
-    std::vector<uint8_t> strokeBuf_; // accumulated dabs (transparent bg), composited via opa
-    std::vector<float>   alphaBuf_;  // per-pixel max-alpha for blur stroke
+    std::vector<uint8_t> canvas_;    // ライブキャンバス（RGBA）、常に合成済みの結果を保持
+    std::vector<uint8_t> preStroke_; // ストローク開始時のスナップショット
+    std::vector<uint8_t> strokeBuf_; // 蓄積ダブ（透明背景）、opa で合成
+    std::vector<float>   alphaBuf_;  // ぼかしストロークのピクセルごと最大アルファ
     int cw_=0, ch_=0;
 
     float rng();
     float evalCurve(const std::vector<CurvePt>& cv, float x) const;
     float resolve(ParamId pid, float base, float pressure, float speed, const BrushCfg& cfg);
 
-    // Dispatch a single dab. flow = density-driven per-dab alpha, opa = stroke opacity.
+    // 単一ダブを描画する。flow=密度由来のダブアルファ、opa=ストローク不透明度
     void dab(const BrushCfg&, float cx, float cy, float rad, float flow, float opa);
 
     void dabPen       (const BrushCfg&, float cx, float cy, float r, float flow, float opa);
@@ -84,9 +85,9 @@ private:
     void dabPastel    (const BrushCfg&, float cx, float cy, float r, float flow, float opa);
     void dabBlur      (const BrushCfg&, float cx, float cy, float r, float flow);
 
-    // Blend directly into canvas_ with alpha limit (eraser uses this).
+    // canvas_ に直接アルファ制限付きでブレンドする（消しゴムはこちらを使う）
     void blendPx(int gx, int gy, float r, float g, float b, float alpha, float limit, bool eraser);
-    // Blend into strokeBuf_, then composite preStroke_+strokeBuf_*opa → canvas_.
+    // strokeBuf_ にブレンドし、preStroke_+strokeBuf_*opa を canvas_ に合成する
     void blendPxBuf(int gx, int gy, float r, float g, float b, float alpha, float opa);
 
     float paperNoise(int gx, int gy) const;

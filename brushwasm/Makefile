@@ -1,4 +1,5 @@
 CXX      = em++
+# -fno-exceptions -fno-rtti: 例外と RTTI を無効化して Wasm バイナリを削減する
 CXXFLAGS = -std=c++17 -O2 -fno-exceptions -fno-rtti
 
 SRC = src/brush_engine.cpp src/wasm_exports.cpp

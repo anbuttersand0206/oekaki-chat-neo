@@ -1,7 +1,7 @@
 export const CANVAS_W = 1600;
 export const CANVAS_H = 1200;
 
-// ── Brush types ───────────────────────────────────────────────────────────────
+// ── ブラシ種別 ─────────────────────────────────────────────────────────────────
 export type BrushType =
   | 'pen' | 'marker' | 'pencil' | 'crayon' | 'airbrush'
   | 'watercolor' | 'oil' | 'pastel' | 'blur';
@@ -17,7 +17,7 @@ export const BRUSH_TYPE_NAMES: Record<BrushType, string> = {
   pastel: 'パステル', blur: 'ぼかし'
 };
 
-// ── Parameter IDs ─────────────────────────────────────────────────────────────
+// ── パラメータ ID ──────────────────────────────────────────────────────────────
 export type ParamId =
   | 'size' | 'opacity' | 'density' | 'spacing'
   | 'mixing' | 'water' | 'spread';
@@ -31,14 +31,14 @@ export const PARAM_NAMES: Record<ParamId, string> = {
   mixing: '混色', water: '水分量', spread: '色伸び'
 };
 
-// ── Modifier curves (piecewise linear) ────────────────────────────────────────
+// ── モディファイアカーブ（区分線形補間） ───────────────────────────────────────
 export interface CurvePoint {
-  x: number;   // anchor x  0–1 (input)
-  y: number;   // anchor y  0–1 (output multiplier)
-  lx?: number; // left  control handle x (absolute)
-  ly?: number; // left  control handle y (absolute)
-  rx?: number; // right control handle x (absolute)
-  ry?: number; // right control handle y (absolute)
+  x: number;   // アンカー X  0–1（入力値）
+  y: number;   // アンカー Y  0–1（出力乗数）
+  lx?: number; // 左ハンドル X（絶対座標）
+  ly?: number; // 左ハンドル Y（絶対座標）
+  rx?: number; // 右ハンドル X（絶対座標）
+  ry?: number; // 右ハンドル Y（絶対座標）
 }
 
 export const DEFAULT_CURVE: CurvePoint[] = [
@@ -46,9 +46,9 @@ export const DEFAULT_CURVE: CurvePoint[] = [
 ];
 
 export interface ParamModifiers {
-  pressureCurve: CurvePoint[]; // input=pressure(0-1), output=multiplier(0-2)
-  speedCurve:    CurvePoint[]; // input=normSpeed(0-1), output=multiplier(0-2)
-  randomAmount:  number;       // ±fraction per dab (0-1)
+  pressureCurve: CurvePoint[]; // 入力=筆圧(0-1)、出力=乗数(0-2)
+  speedCurve:    CurvePoint[]; // 入力=正規化速度(0-1)、出力=乗数(0-2)
+  randomAmount:  number;       // ±ランダム量（0-1）。ダブごとに適用
 }
 
 export function defaultModifiers(): ParamModifiers {
@@ -59,17 +59,17 @@ export function defaultModifiers(): ParamModifiers {
   };
 }
 
-// ── Brush configuration ───────────────────────────────────────────────────────
+// ── ブラシ設定 ─────────────────────────────────────────────────────────────────
 export interface BrushConfig {
   type:      BrushType;
   size:      number;  // 1-500 px
   opacity:   number;  // 0-1
-  density:   number;  // 0-1 per-dab contribution
-  spacing:   number;  // 0.01-2.0 fraction of size
-  hardness:  number;  // 0-1: edge hardness (0=fully soft, 1=hard circle)
-  mixing:    number;  // 0-1 wet brush
-  water:     number;  // 0-1 wet brush
-  spread:    number;  // 0-1 wet brush
+  density:   number;  // 0-1（ダブごとの寄与率）
+  spacing:   number;  // 0.01-2.0（サイズに対する割合）
+  hardness:  number;  // 0-1（0=完全ソフト、1=ハード円）
+  mixing:    number;  // 0-1 ウェットブラシ
+  water:     number;  // 0-1 ウェットブラシ
+  spread:    number;  // 0-1 ウェットブラシ
   modifiers: Record<ParamId, ParamModifiers>;
 }
 
@@ -77,13 +77,13 @@ export function defaultBrushConfig(type: BrushType = 'pen'): BrushConfig {
   const mods = {} as Record<ParamId, ParamModifiers>;
   for (const pid of PARAM_IDS) mods[pid] = defaultModifiers();
 
-  // Per-type pressure curve overrides
+  // ブラシ種別ごとに筆圧カーブのデフォルトを上書きする
   if (type === 'pen') {
-    // Size: 0→100% linear (pressure directly controls size)
+    // サイズ: 筆圧 0→100% 線形（筆圧がそのままサイズに反映）
     mods['size'].pressureCurve = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
   }
   if (type === 'marker') {
-    // Opacity: 0→100% linear
+    // 不透明度: 筆圧 0→100% 線形
     mods['opacity'].pressureCurve = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
   }
   if (type === 'pencil') {
@@ -91,9 +91,9 @@ export function defaultBrushConfig(type: BrushType = 'pen'): BrushConfig {
     mods['density'].pressureCurve = [{ x: 0, y: 0   }, { x: 1, y: 1 }];
   }
   if (type === 'watercolor') {
-    // Opacity: 50→100% linear
+    // 不透明度: 筆圧 50→100% 線形
     mods['opacity'].pressureCurve = [{ x: 0, y: 0.5 }, { x: 1, y: 1 }];
-    // Density: 0→100% linear
+    // 濃度: 筆圧 0→100% 線形
     mods['density'].pressureCurve = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
   }
 
@@ -123,12 +123,12 @@ export function defaultBrushConfig(type: BrushType = 'pen'): BrushConfig {
   };
 }
 
-// ── Wet brush types ───────────────────────────────────────────────────────────
+// ── ウェットブラシ判定 ────────────────────────────────────────────────────────
 export function isWetBrush(t: BrushType): boolean {
   return t === 'watercolor' || t === 'oil';
 }
 
-// ── Stroke settings (runtime) ─────────────────────────────────────────────────
+// ── ストローク設定（実行時） ───────────────────────────────────────────────────
 export interface StrokeSettings {
   brushConfig: BrushConfig;
   color: [number, number, number]; // RGB 0-255
@@ -136,15 +136,15 @@ export interface StrokeSettings {
   texture?: ImageData | null;
 }
 
-// ── Network stroke point ──────────────────────────────────────────────────────
+// ── ネットワーク用ストロークポイント ──────────────────────────────────────────
 export interface StrokePoint {
   x: number;
   y: number;
-  p: number;   // pressure 0-1
-  sp?: number; // speed px/s
+  p: number;   // 筆圧 0-1
+  sp?: number; // 速度 px/s
 }
 
-// ── DrawOp types ──────────────────────────────────────────────────────────────
+// ── 描画操作の型定義 ──────────────────────────────────────────────────────────
 export interface DrawOpStroke {
   type:   'stroke';
   tool:   'brush' | 'eraser';
@@ -185,7 +185,7 @@ export type ToolType =
   | 'brush' | 'eraser' | 'fill' | 'pan'
   | 'rectSelect' | 'lasso' | 'eyedropper';
 
-// ── User / room ───────────────────────────────────────────────────────────────
+// ── ユーザー / 部屋 ────────────────────────────────────────────────────────────
 export interface User { id: string; name: string; }
 
 export const USER_COLORS = [

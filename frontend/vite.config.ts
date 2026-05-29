@@ -9,6 +9,8 @@ export default defineConfig({
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on('proxyReq', (proxyReq) => {
+            // ローカル開発では Cookie をバックエンドに転送しない
+            // （認証テストのため意図的に未認証で通す場合があるため）
             proxyReq.removeHeader('cookie');
           });
         }
@@ -30,6 +32,7 @@ export default defineConfig({
   },
   build: {
     target: 'es2020',
+    // Wasm バイナリをインライン化せず別ファイルとして配置する
     assetsInlineLimit: 0
   }
 });

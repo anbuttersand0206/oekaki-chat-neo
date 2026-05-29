@@ -42,7 +42,7 @@ export class App {
 
     document.getElementById('swap-colors-btn')?.addEventListener('click', () => { this.swapColors(); });
 
-    // Selection actions
+    // 選択操作ボタン
     document.getElementById('cut-btn')?.addEventListener('click', () => this.doCut());
     document.getElementById('copy-btn')?.addEventListener('click', () => this.doCopy());
     document.getElementById('paste-btn')?.addEventListener('click', () => this.doPaste());
@@ -62,7 +62,7 @@ export class App {
       document.getElementById('select-tolerance-val')!.textContent = tolSlider.value;
     });
 
-    // Determine initial screen from auth state
+    // 認証状態に応じて初期画面を決定する
     this.currentUser = await this.auth.getMe();
     if (this.currentUser) {
       await this.showDashboard();
@@ -137,7 +137,7 @@ export class App {
       const data = await res.json();
       this.roomUI.renderRoomList(data.rooms ?? []);
     } catch {
-      // Non-fatal: dashboard still usable without room list
+      // 失敗してもダッシュボード自体は使えるので握りつぶす
     }
   }
 
@@ -276,6 +276,7 @@ export class App {
       }
     });
 
+    // カーソル座標を 50ms スロットルで送信する（帯域節約）
     document.getElementById('canvas-wrapper')!.addEventListener('pointermove', (e: PointerEvent) => {
       const now = Date.now();
       if (now - this.lastCursorSent < 50) return;
@@ -475,6 +476,7 @@ export class App {
   private setupRightPanelToggle() {
     const wrap = document.getElementById('right-panel-wrap')!;
     const btn  = document.getElementById('right-panel-toggle')!;
+    // Cookie でパネルの折り畳み状態を永続化する
     const collapsed = document.cookie.match(/(?:^|; )oekaki_panel_collapsed=([^;]*)/)?.[1] === '1';
     if (collapsed) wrap.classList.add('collapsed');
     btn.addEventListener('click', () => {
@@ -484,7 +486,7 @@ export class App {
     });
   }
 
-  // ── Selection actions ──────────────────────────────────────────────────────
+  // ── 選択操作 ──────────────────────────────────────────────────────────────────
 
   private doCopy() { this.engine?.selection.copy(this.engine.mainCtx); }
 
@@ -565,7 +567,7 @@ export class App {
     this.colorPicker.setRGB(255 - r, 255 - g, 255 - b);
   }
 
-  // ── Remote cursors ─────────────────────────────────────────────────────────
+  // ── リモートカーソル ───────────────────────────────────────────────────────────
 
   private showRemoteCursor(userId: string, username: string, cx: number, cy: number) {
     const container = document.getElementById('remote-cursors')!;
@@ -588,9 +590,10 @@ export class App {
     el.style.top = `${cy}px`;
   }
 
-  // ── Canvas state sync ──────────────────────────────────────────────────────
+  // ── キャンバス状態の定期同期 ──────────────────────────────────────────────────
 
   private startCanvasSync() {
+    // 30秒ごとにキャンバス状態をサーバーに保存する（接続が切れても復元できるように）
     this.canvasSyncTimer = window.setInterval(() => {
       if (this.engine) this.socket.emitCanvasState(this.engine.getStateDataUrl());
     }, 30_000);

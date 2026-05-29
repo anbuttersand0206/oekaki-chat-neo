@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 
 
 def _serialize_user(user) -> dict:
+    """User オブジェクトをクライアントへ返すレスポンス形式に変換する。
+    フィールドを一か所に集約することで、レスポンス形式の変更が各ビューに波及しない。
+    """
     return {
         'id': user.id,
         'username': user.username,
@@ -27,6 +30,7 @@ def login_view(request: HttpRequest) -> JsonResponse:
     except (json.JSONDecodeError, ValueError):
         return JsonResponse({'error': 'リクエストが不正です'}, status=400)
 
+    # メールアドレスは大文字/小文字を区別しないため小文字に正規化する
     email = str(body.get('email', '')).strip().lower()
     password = str(body.get('password', ''))
 

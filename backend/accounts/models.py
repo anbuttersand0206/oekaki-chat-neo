@@ -4,7 +4,7 @@ from django.db import models
 
 class User(AbstractUser):
     email = models.EmailField(unique=True)
-    # Null for email+password users; populated by Google SSO
+    # メール+パスワード認証ユーザーは NULL。Google SSO 経由のみ値が入る
     google_sub = models.CharField(max_length=255, null=True, blank=True, unique=True)
     locale = models.CharField(max_length=10, default='ja')
     timezone = models.CharField(max_length=50, default='Asia/Tokyo')
@@ -15,5 +15,5 @@ class User(AbstractUser):
     class Meta:
         db_table = 'accounts_user'
 
-    # Future: add a OneToOneField to a Profile model for profile_picture
-    # and other optional per-user attributes (see db_design_guide_v2.md §3.1)
+    # TODO: プロフィール画像など任意属性は Profile モデルに OneToOneField で追加予定
+    #   （db_design_guide_v2.md §3.1 参照）

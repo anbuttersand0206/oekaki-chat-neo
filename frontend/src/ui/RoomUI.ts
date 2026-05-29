@@ -11,7 +11,7 @@ export class RoomUI {
   onLeaveRoom?: () => void;
 
   init() {
-    // ── Login screen ──────────────────────────────────────────────────────────
+    // ── ログイン画面 ──────────────────────────────────────────────────────────
     ['login-email', 'login-password'].forEach(id => {
       document.getElementById(id)?.addEventListener('keydown', e => {
         if (e.key === 'Enter') document.getElementById('login-btn')?.click();
@@ -31,12 +31,12 @@ export class RoomUI {
       this.onGoogleLogin?.();
     });
 
-    // ── Dashboard screen ──────────────────────────────────────────────────────
+    // ── ダッシュボード画面 ────────────────────────────────────────────────────
     document.getElementById('logout-btn')?.addEventListener('click', async () => {
       this.onLogout?.();
     });
 
-    // Tab switching (dashboard join/create)
+    // タブ切り替え（ダッシュボードの参加/作成）
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const tab = (btn as HTMLElement).dataset.tab!;
@@ -47,7 +47,7 @@ export class RoomUI {
       });
     });
 
-    // Enter key submits
+    // Enter キーでフォーム送信
     ['join-room-id', 'join-password'].forEach(id => {
       document.getElementById(id)?.addEventListener('keydown', e => {
         if (e.key === 'Enter') document.getElementById('join-btn')?.click();
@@ -81,7 +81,7 @@ export class RoomUI {
       if (confirm('退室しますか？')) this.onLeaveRoom?.();
     });
 
-    // Collapsible panels
+    // 折りたたみパネル
     document.querySelectorAll('.collapsible').forEach(header => {
       header.addEventListener('click', (e) => {
         if ((e.target as HTMLElement).closest('button')) return;
@@ -95,7 +95,7 @@ export class RoomUI {
       });
     });
 
-    // Menu dropdowns
+    // メニュードロップダウン
     document.querySelectorAll('.menu-group').forEach(group => {
       const btn = group.querySelector('.menu-btn')!;
       const dropdown = group.querySelector('.dropdown') as HTMLElement;
@@ -139,7 +139,7 @@ export class RoomUI {
       card.addEventListener('click', () => {
         const roomId = (card as HTMLElement).dataset.roomId!;
         (document.getElementById('join-room-id') as HTMLInputElement).value = roomId;
-        // Switch to "join" tab
+        // 「参加」タブに切り替えてパスワード入力欄にフォーカスする
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
         document.querySelector('.tab-btn[data-tab="join"]')?.classList.add('active');
@@ -189,15 +189,15 @@ export class RoomUI {
     msgs.scrollTop = msgs.scrollHeight;
   }
 
-  private setLoginLoading(v: boolean) {
+  private setLoginLoading(isLoading: boolean) {
     const el = document.getElementById('login-btn') as HTMLButtonElement;
-    if (el) el.disabled = v;
+    if (el) el.disabled = isLoading;
   }
 
-  private setRoomLoading(v: boolean) {
+  private setRoomLoading(isLoading: boolean) {
     ['join-btn', 'create-btn'].forEach(id => {
       const el = document.getElementById(id) as HTMLButtonElement;
-      if (el) el.disabled = v;
+      if (el) el.disabled = isLoading;
     });
   }
 }

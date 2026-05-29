@@ -34,7 +34,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    # CorsMiddleware must be as high as possible
+    # CorsMiddleware はプリフライトリクエストを最初に処理するため先頭に置く必要がある
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -86,7 +86,7 @@ AUTHENTICATION_BACKENDS = [
 SESSION_ENGINE = 'django.contrib.sessions.backends.db'
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
-SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30 days
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30日
 
 # ── django-allauth ────────────────────────────────────────────────────────────
 
@@ -97,7 +97,7 @@ ACCOUNT_EMAIL_VERIFICATION = 'optional'
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'http' if DEBUG else 'https'
 
 SOCIALACCOUNT_AUTO_SIGNUP = True
-SOCIALACCOUNT_LOGIN_ON_GET = True   # skip the "confirm social login" intermediate page
+SOCIALACCOUNT_LOGIN_ON_GET = True   # 「ソーシャルログイン確認」中間ページをスキップする
 SOCIALACCOUNT_STORE_TOKENS = False
 
 SOCIALACCOUNT_PROVIDERS = {
@@ -115,9 +115,9 @@ SOCIALACCOUNT_PROVIDERS = {
 LOGIN_REDIRECT_URL = '/'
 ACCOUNT_LOGOUT_REDIRECT_URL = '/'
 
-# ── Email ─────────────────────────────────────────────────────────────────────
-# Switch to a real SMTP backend in production by setting EMAIL_BACKEND env var.
-# Example: EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+# ── メール ────────────────────────────────────────────────────────────────────
+# 本番では EMAIL_BACKEND 環境変数に SMTP バックエンドを指定すること。
+# 例: EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
 
 EMAIL_BACKEND = os.environ.get(
     'EMAIL_BACKEND',

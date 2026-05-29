@@ -2,10 +2,10 @@ import { io, Socket } from 'socket.io-client';
 import { DrawOp, User } from '../types';
 
 /**
- * The SocketClient manages the real-time WebSocket connection to the backend.
- * It uses Socket.IO for reliable communication and provides a high-level API
- * for joining rooms, emitting drawing operations, and handling incoming events
- * with an isolated error-handling wrapper.
+ * バックエンドとのリアルタイム WebSocket 接続を管理する。
+ *
+ * 各ハンドラは wrapEventHandler でラップされており、
+ * 1つのハンドラが例外を投げても他のイベント処理が止まらないようにしている。
  */
 export class SocketClient {
   private socket: Socket;
@@ -28,8 +28,6 @@ export class SocketClient {
       reconnectionAttempts: 10
     });
 
-    // ハンドラ内の例外を隔離してログするラッパー。
-    // 1つのハンドラが throw しても他のイベント処理が止まらないようにするため。
     const wrapEventHandler = (eventName: string, fn: () => void) => {
       try { fn(); } catch (e) { console.error(`[socket:${eventName}]`, e); }
     };
@@ -42,9 +40,9 @@ export class SocketClient {
     this.socket.on('cursor_move',  (data) => wrapEventHandler('cursor_move',  () => this.onCursorMove?.(data)));
     this.socket.on('chat_message', (data) => wrapEventHandler('chat_message', () => this.onChatMessage?.(data)));
 
-    this.socket.on('connect',            () => console.log('Socket connected'));
-    this.socket.on('disconnect',   (reason) => console.warn('Socket disconnected:', reason));
-    this.socket.on('reconnect_failed',   () => this.onReconnectFailed?.());
+    this.socket.on('connect',          () => console.log('Socket connected'));
+    this.socket.on('disconnect', (reason) => console.warn('Socket disconnected:', reason));
+    this.socket.on('reconnect_failed', () => this.onReconnectFailed?.());
   }
 
   joinRoom(roomId: string, password: string) {

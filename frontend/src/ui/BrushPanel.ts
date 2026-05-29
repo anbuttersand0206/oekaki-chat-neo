@@ -6,10 +6,11 @@ import { CurveEditor } from './CurveEditor';
 import { serializeAllConfigs, deserializeAllConfigs } from './BrushStorage';
 
 /**
- * The BrushPanel manages the UI and state for all brush-related settings.
- * It handles individual configurations for each brush type, manages parameter
- * sliders and curve editors, and ensures settings are persisted to the server
- * via debounced Socket.IO events.
+ * ブラシ設定の UI と状態を管理する。
+ *
+ * ブラシ種別ごとに独立した BrushConfig を保持し、
+ * スライダー操作後はデバウンスして Socket.IO 経由でサーバーに保存する。
+ * スライダー ↔ 数値入力の同期もここで行う。
  */
 export class BrushPanel {
   private allConfigs: Map<BrushType, BrushConfig> = new Map(
@@ -18,7 +19,7 @@ export class BrushPanel {
   private cfg: BrushConfig = this.allConfigs.get('pen')!;
   private texture: ImageData | null = null;
 
-  // Curve editors (one pressure + one speed per param, shown for selected param)
+  // 選択中のパラメータに対して筆圧・速度カーブを 1 本ずつ表示する
   private selectedParam: ParamId = 'size';
   private pressureEditor!: CurveEditor;
   private speedEditor!: CurveEditor;
@@ -31,7 +32,6 @@ export class BrushPanel {
   get brushConfig(): BrushConfig { return { ...this.cfg, modifiers: this.cfg.modifiers }; }
   get currentTexture(): ImageData | null { return this.texture; }
 
-  // Quick accessors for status bar / shortcuts
   get size()    { return this.cfg.size; }
   adjustSize(delta: number) {
     this.cfg.size = Math.max(1, Math.min(500, this.cfg.size + delta));
@@ -41,7 +41,7 @@ export class BrushPanel {
     this.debouncedSave();
   }
 
-  // ── Restore brush settings received from server on room_joined ────────────────
+  // ── room_joined 時にサーバーから受信したブラシ設定を復元する ─────────────────
   restoreAllBrushConfigs(raw: Record<string, unknown>) {
     const { activeType, configs } = deserializeAllConfigs(raw);
     this.allConfigs = configs;
@@ -56,7 +56,7 @@ export class BrushPanel {
     this.renderPreview();
   }
 
-  // ── Init ──────────────────────────────────────────────────────────────────────
+  // ── 初期化 ────────────────────────────────────────────────────────────────────
   init() {
     this.bindBrushTypeButtons();
     this.bindCommonSliders();
@@ -70,7 +70,7 @@ export class BrushPanel {
     this.renderPreview();
   }
 
-  // ── Deferred save to PostgreSQL via socket ────────────────────────────────
+  // ── PostgreSQL への保存をデバウンスして Socket 経由で送信する ─────────────────
   private debouncedSave() {
     if (this.saveTimer !== null) clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => {
@@ -79,7 +79,7 @@ export class BrushPanel {
     }, 400);
   }
 
-  // ── Brush type buttons ────────────────────────────────────────────────────────
+  // ── ブラシ種別ボタン ──────────────────────────────────────────────────────────
   private bindBrushTypeButtons() {
     document.querySelectorAll<HTMLElement>('[data-brush-type]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -99,14 +99,13 @@ export class BrushPanel {
     });
   }
 
-  // ── Common sliders ────────────────────────────────────────────────────────────
+  // ── 共通スライダー ────────────────────────────────────────────────────────────
   private bindCommonSliders() {
     this.bindSlider('bp-size',     v => { this.cfg.size     = v; });
     this.bindSlider('bp-opacity',  v => { this.cfg.opacity  = v / 100; });
     this.bindSlider('bp-density',  v => { this.cfg.density  = v / 100; });
     this.bindSlider('bp-spacing',  v => { this.cfg.spacing  = v / 100; });
     this.bindSlider('bp-hardness', v => { this.cfg.hardness = v / 100; });
-
   }
 
   private bindWetSliders() {
@@ -150,7 +149,6 @@ export class BrushPanel {
     this.syncSlider('bp-mixing',   Math.round(this.cfg.mixing   * 100));
     this.syncSlider('bp-water',    Math.round(this.cfg.water    * 100));
     this.syncSlider('bp-spread',   Math.round(this.cfg.spread   * 100));
-    // Update active brush type button
     document.querySelectorAll('[data-brush-type]').forEach(b => {
       b.classList.toggle('active', (b as HTMLElement).dataset.brushType === this.cfg.type);
     });
@@ -161,7 +159,7 @@ export class BrushPanel {
     if (el) el.style.display = isWetBrush(this.cfg.type) ? '' : 'none';
   }
 
-  // ── Modifier / curve section ──────────────────────────────────────────────────
+  // ── モディファイア / カーブセクション ──────────────────────────────────────────
   private bindParamSelector() {
     document.querySelectorAll<HTMLElement>('[data-mod-param]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -171,7 +169,6 @@ export class BrushPanel {
         this.updateCurveEditors();
       });
     });
-    // Random slider
     const randSlider = document.getElementById('bp-random') as HTMLInputElement | null;
     randSlider?.addEventListener('input', () => {
       this.cfg.modifiers[this.selectedParam].randomAmount = +randSlider.value / 100;
@@ -214,7 +211,6 @@ export class BrushPanel {
       this.debouncedSave();
     });
 
-    // Preset buttons
     document.querySelectorAll<HTMLElement>('#curve-pressure-presets .curve-preset-btn').forEach(btn => {
       btn.addEventListener('click', () => this.pressureEditor.setPreset(btn.dataset.preset!));
     });
@@ -230,13 +226,12 @@ export class BrushPanel {
     this.speedEditor   .setPoints(m.speedCurve);
     const randSlider = document.getElementById('bp-random') as HTMLInputElement | null;
     if (randSlider) randSlider.value = String(Math.round(m.randomAmount * 100));
-    // Update selected param button
     document.querySelectorAll('[data-mod-param]').forEach(b => {
       b.classList.toggle('active', (b as HTMLElement).dataset.modParam === this.selectedParam);
     });
   }
 
-  // ── Paper texture ─────────────────────────────────────────────────────────────
+  // ── 紙テクスチャ ──────────────────────────────────────────────────────────────
   private bindTexture() {
     const input = document.getElementById('bp-texture-input') as HTMLInputElement | null;
     input?.addEventListener('change', () => {
@@ -283,7 +278,7 @@ export class BrushPanel {
     }
   }
 
-  // ── Brush preview ─────────────────────────────────────────────────────────────
+  // ── ブラシプレビュー ──────────────────────────────────────────────────────────
   renderPreview() {
     const canvas = document.getElementById('brush-preview') as HTMLCanvasElement | null;
     if (!canvas) return;

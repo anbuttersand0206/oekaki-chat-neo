@@ -1,4 +1,4 @@
-// Scanline flood fill with tolerance
+// スキャンライン方式の塗りつぶし（許容誤差つき）
 
 function colorDist(
   data: Uint8ClampedArray,
@@ -33,7 +33,7 @@ export function floodFill(
   const seedB = data[startIdx + 2];
   const seedA = data[startIdx + 3];
 
-  // If click on same color skip
+  // クリック位置がすでに同色なら処理不要
   if (
     Math.abs(seedR - fillR) <= 2 &&
     Math.abs(seedG - fillG) <= 2 &&

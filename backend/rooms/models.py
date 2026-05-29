@@ -29,14 +29,14 @@ class BrushSettings(models.Model):
 
 class ChatMessage(models.Model):
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='chat_messages')
-    # Nullable because messages sent before auth migration don't have a linked user
+    # 認証移行前のメッセージにはユーザー紐付けがないため NULL 許容
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         related_name='chat_messages',
     )
-    username = models.CharField(max_length=20)  # denormalized display name
+    username = models.CharField(max_length=20)  # 表示名を非正規化保持（user 削除後も読める）
     message = models.CharField(max_length=500)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -46,7 +46,7 @@ class ChatMessage(models.Model):
 
 
 class UserRoom(models.Model):
-    """Tracks which rooms a user has joined (for the dashboard room list)."""
+    """ユーザーが過去に参加した部屋を記録する（ダッシュボードの部屋一覧に使用）。"""
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,

@@ -38,6 +38,7 @@ export class AuthClient {
   }
 
   startGoogleLogin(): void {
+    // django-allauth の Google OAuth フローを開始する
     window.location.href = '/accounts/google/login/?next=/';
   }
 }
