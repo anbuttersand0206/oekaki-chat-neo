@@ -129,7 +129,8 @@ html, body {
   position: relative;
 }
 
-#theme-toggle-login {
+#theme-toggle-login,
+#theme-toggle-signup {
   position: absolute;
   top: 12px;
   right: 12px;
@@ -139,6 +140,39 @@ html, body {
 [data-theme="light"] #login-screen {
   background: radial-gradient(ellipse at 30% 40%, #d4ddf8 0%, #eaeaf8 60%);
 }
+
+/* ── Signup Screen ── */
+#signup-screen {
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 30% 40%, #1a1a3a 0%, #0f0f18 60%);
+  position: relative;
+}
+
+[data-theme="light"] #signup-screen {
+  background: radial-gradient(ellipse at 30% 40%, #d4ddf8 0%, #eaeaf8 60%);
+}
+
+/* ── 画面切り替えリンク ── */
+.auth-switch {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color .15s;
+}
+.link-btn:hover { color: var(--accent2); }
 
 /* Google SSO button */
 .auth-divider {
@@ -309,6 +343,25 @@ html, body {
   box-shadow: 0 24px 64px rgba(0,0,0,.6);
 }
 
+/* ログイン・会員登録フォームのフィールド間隔。
+   ダッシュボードのタブ内フォームには影響しないよう > で直接子要素に限定する。 */
+.room-dialog > .field-group + .field-group {
+  margin-top: 16px;
+}
+
+/* フィールド群とボタンの間に意図的な余白を置き、
+   「入力エリア」と「実行ボタン」を視覚的に分離する */
+.room-dialog > .primary-btn {
+  margin-top: 24px;
+}
+
+/* 会員登録は 4 フィールドあるため、小さな画面でカードが
+   ビューポートを超えないようにスクロールを許可する */
+#signup-screen .room-dialog {
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
 .room-logo {
   display: flex;
   align-items: center;
@@ -370,6 +423,40 @@ html, body {
   transition: border-color .15s;
 }
 .field-group input:focus { border-color: var(--accent); }
+
+/* ── パスワード表示トグル ── */
+.password-field {
+  position: relative;
+}
+
+/* ボタン分の領域を右 padding で確保し、入力テキストが重ならないようにする */
+.password-field input {
+  padding-right: 38px;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 2px;
+  cursor: pointer;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  line-height: 0;
+  border-radius: 3px;
+  transition: color .15s;
+}
+.password-toggle-btn:hover { color: var(--text); }
+
+/* 初期状態（パスワード非表示）: 目アイコンを表示、目線消しアイコンを非表示 */
+.password-toggle-btn .icon-eye-off { display: none; }
+/* is-visible 付与時（パスワード表示中）: 目アイコンを非表示、目線消しアイコンを表示 */
+.password-toggle-btn.is-visible .icon-eye     { display: none; }
+.password-toggle-btn.is-visible .icon-eye-off { display: block; }
 
 .primary-btn {
   width: 100%;

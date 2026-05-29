@@ -1,10 +1,13 @@
 import { escapeHtml } from '../utils';
 
-type Screen = 'login' | 'dashboard' | 'draw';
+type Screen = 'login' | 'signup' | 'dashboard' | 'draw';
 
 export class RoomUI {
   onLogin?: (email: string, password: string) => Promise<void>;
   onGoogleLogin?: () => void;
+  onSignup?: (username: string, email: string, password: string) => Promise<void>;
+  onGoToSignup?: () => void;
+  onGoToLogin?: () => void;
   onLogout?: () => void;
   onCreateRoom?: (roomId: string, password: string) => Promise<void>;
   onJoinRoom?: (roomId: string, password: string) => Promise<void>;
@@ -29,6 +32,39 @@ export class RoomUI {
 
     document.getElementById('google-login-btn')?.addEventListener('click', () => {
       this.onGoogleLogin?.();
+    });
+
+    document.getElementById('goto-signup-btn')?.addEventListener('click', () => {
+      this.onGoToSignup?.();
+    });
+
+    // ── 会員登録画面 ──────────────────────────────────────────────────────────
+    ['signup-username', 'signup-email', 'signup-password', 'signup-password-confirm'].forEach(id => {
+      document.getElementById(id)?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') document.getElementById('signup-btn')?.click();
+      });
+    });
+
+    document.getElementById('signup-btn')?.addEventListener('click', async () => {
+      const username        = (document.getElementById('signup-username') as HTMLInputElement).value.trim();
+      const email           = (document.getElementById('signup-email') as HTMLInputElement).value.trim();
+      const password        = (document.getElementById('signup-password') as HTMLInputElement).value;
+      const passwordConfirm = (document.getElementById('signup-password-confirm') as HTMLInputElement).value;
+
+      if (!username || !email || !password || !passwordConfirm) {
+        return this.showSignupError('すべての項目を入力してください');
+      }
+      // サーバーに送信する前にクライアント側で確認する（UX 向上のため）
+      if (password !== passwordConfirm) {
+        return this.showSignupError('パスワードが一致しません');
+      }
+      this.setSignupLoading(true);
+      try { await this.onSignup?.(username, email, password); }
+      finally { this.setSignupLoading(false); }
+    });
+
+    document.getElementById('goto-login-btn')?.addEventListener('click', () => {
+      this.onGoToLogin?.();
     });
 
     // ── ダッシュボード画面 ────────────────────────────────────────────────────
@@ -109,10 +145,24 @@ export class RoomUI {
     document.addEventListener('click', () => {
       document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
     });
+
+    // ── パスワード表示トグル ──────────────────────────────────────────────────
+    // data-for 属性で各ボタンと入力欄を 1:1 に紐付ける。
+    // 状態は CSS クラス .is-visible で管理し、JS にブール変数を持たない。
+    document.querySelectorAll<HTMLElement>('.password-toggle-btn').forEach(btn => {
+      const input = document.getElementById(btn.dataset.for!) as HTMLInputElement;
+      btn.addEventListener('click', () => {
+        const isNowVisible = input.type === 'password';
+        input.type = isNowVisible ? 'text' : 'password';
+        btn.classList.toggle('is-visible', isNowVisible);
+        btn.setAttribute('aria-label', isNowVisible ? 'パスワードを非表示' : 'パスワードを表示');
+      });
+    });
   }
 
   showScreen(screen: Screen) {
     document.getElementById('login-screen')!.classList.toggle('active', screen === 'login');
+    document.getElementById('signup-screen')!.classList.toggle('active', screen === 'signup');
     document.getElementById('dashboard-screen')!.classList.toggle('active', screen === 'dashboard');
     document.getElementById('draw-screen')!.classList.toggle('active', screen === 'draw');
   }
@@ -149,19 +199,9 @@ export class RoomUI {
     });
   }
 
-  showLoginError(msg: string) {
-    const el = document.getElementById('login-error')!;
-    el.textContent = msg;
-    el.hidden = false;
-    setTimeout(() => { el.hidden = true; }, 5000);
-  }
-
-  showRoomError(msg: string) {
-    const el = document.getElementById('room-error')!;
-    el.textContent = msg;
-    el.hidden = false;
-    setTimeout(() => { el.hidden = true; }, 5000);
-  }
+  showSignupError(msg: string) { this.showError('signup-error', msg); }
+  showLoginError(msg: string)  { this.showError('login-error', msg); }
+  showRoomError(msg: string)   { this.showError('room-error', msg); }
 
   setRoomInfo(roomId: string, userCount: number, maxUsers: number) {
     document.getElementById('room-id-display')!.textContent = `#${roomId}`;
@@ -189,8 +229,21 @@ export class RoomUI {
     msgs.scrollTop = msgs.scrollHeight;
   }
 
+  // エラーメッセージを指定要素に表示し、5 秒後に自動で隠す
+  private showError(elementId: string, msg: string) {
+    const el = document.getElementById(elementId)!;
+    el.textContent = msg;
+    el.hidden = false;
+    setTimeout(() => { el.hidden = true; }, 5000);
+  }
+
   private setLoginLoading(isLoading: boolean) {
     const el = document.getElementById('login-btn') as HTMLButtonElement;
+    if (el) el.disabled = isLoading;
+  }
+
+  private setSignupLoading(isLoading: boolean) {
+    const el = document.getElementById('signup-btn') as HTMLButtonElement;
     if (el) el.disabled = isLoading;
   }
 

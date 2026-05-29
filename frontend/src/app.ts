@@ -85,6 +85,26 @@ export class App {
       this.auth.startGoogleLogin();
     };
 
+    // 画面遷移の権限は App が持つ。RoomUI は表示のみを担い、遷移判断は App に委譲する。
+    // これにより、将来メール認証フローなどを挟む場合も App 側だけ変更できる。
+    this.roomUI.onGoToSignup = () => {
+      this.roomUI.showScreen('signup');
+    };
+
+    this.roomUI.onGoToLogin = () => {
+      this.roomUI.showScreen('login');
+    };
+
+    this.roomUI.onSignup = async (username, email, password) => {
+      try {
+        this.currentUser = await this.auth.register(username, email, password);
+        // 登録成功時はそのままダッシュボードへ（サーバー側で自動ログイン済み）
+        await this.showDashboard();
+      } catch (e: any) {
+        this.roomUI.showSignupError(e.message ?? '登録に失敗しました');
+      }
+    };
+
     this.roomUI.onLogout = async () => {
       await this.auth.logout();
       this.currentUser = null;

@@ -18,6 +18,20 @@ export class AuthClient {
     }
   }
 
+  async register(username: string, email: string, password: string): Promise<AuthUser> {
+    // サーバー側でバリデーション・重複確認・ユーザー作成を行い、
+    // 成功時はレスポンスヘッダでセッション Cookie が自動設定される
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ username, email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? '登録に失敗しました');
+    return data.user;
+  }
+
   async login(email: string, password: string): Promise<AuthUser> {
     const res = await fetch('/api/auth/login', {
       method: 'POST',

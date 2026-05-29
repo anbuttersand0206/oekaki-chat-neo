@@ -24,7 +24,7 @@
 | 機能 | 詳細 |
 |------|------|
 | **メールアドレス＋パスワードでログイン** | 登録済みアカウントでログイン |
-| **Google アカウントでログイン / 新規登録** | Google SSO（django-allauth）でワンクリック登録＆ログイン |
+| **Google アカウントでログイン / 新規会員登録** | Google SSO（django-allauth）でワンクリック登録＆ログイン |
 | **ダッシュボード** | ログイン後に過去参加した部屋の一覧を表示。カードをクリックすると部屋IDが自動入力される |
 
 > **注意**: Google SSO を利用するには `.env` に `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` の設定が必要です。設定方法は [Google SSO の設定](#google-sso-の設定) を参照してください。
@@ -346,7 +346,7 @@ python manage.py createsuperuser
 
 ## Google SSO の設定
 
-Google SSO（Googleでログイン / 新規登録）を利用するには、Google Cloud Console での設定が必要です。
+Google SSO（Googleでログイン / 新規会員登録）を利用するには、Google Cloud Console での設定が必要です。
 
 1. [Google Cloud Console](https://console.cloud.google.com/) を開く
 2. **「APIとサービス」→「認証情報」** に移動
@@ -410,7 +410,7 @@ SELECT * FROM rooms_userroom;      -- 参加履歴
 
 1. `http://localhost:8080` を開くとログイン画面が表示される
 2. **メールアドレス＋パスワード** を入力して「ログイン」、または  
-   **「Google でログイン / 新規登録」** をクリック
+   **「Google でログイン / 新規会員登録」** をクリック
 3. ログイン成功後、ダッシュボードへ遷移する
 
 > はじめてのアカウントは `python manage.py createsuperuser` または Google SSO で作成してください。
