@@ -12,8 +12,15 @@
 </head>
 <body>
 
+<!-- ===================== LOADING SCREEN ===================== -->
+<!-- セッション確認中に表示する。JS が走る前から visible にしてチラつきを防ぐ。
+     showScreen() が呼ばれると .hidden が付いて非表示になる。 -->
+<div id="loading-screen" class="loading-screen">
+  <div class="loading-spinner"></div>
+</div>
+
 <!-- ===================== LOGIN SCREEN ===================== -->
-<div id="login-screen" class="screen active">
+<div id="login-screen" class="screen">
   <div class="room-bg-grid"></div>
   <button class="theme-toggle-btn" id="theme-toggle-login" title="テーマ切り替え" aria-label="テーマ切り替え">
     <svg class="theme-icon theme-icon--sun" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="3"/><line x1="8" y1="1.5" x2="8" y2="3.5"/><line x1="8" y1="12.5" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="3.5" y2="8"/><line x1="12.5" y1="8" x2="14.5" y2="8"/><line x1="3.4" y1="3.4" x2="4.8" y2="4.8"/><line x1="11.2" y1="11.2" x2="12.6" y2="12.6"/><line x1="12.6" y1="3.4" x2="11.2" y2="4.8"/><line x1="4.8" y1="11.2" x2="3.4" y2="12.6"/></svg>

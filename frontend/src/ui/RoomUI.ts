@@ -277,6 +277,10 @@ export class RoomUI {
   }
 
   showScreen(screen: Screen) {
+    // どの画面に切り替える場合でも必ずローディング画面を隠す。
+    // セッション確認が完了した証拠として、これ以降はスピナーを見せない。
+    document.getElementById('loading-screen')!.classList.add('hidden');
+
     document.getElementById('login-screen')!.classList.toggle('active', screen === 'login');
     document.getElementById('signup-screen')!.classList.toggle('active', screen === 'signup');
     document.getElementById('dashboard-screen')!.classList.toggle('active', screen === 'dashboard');

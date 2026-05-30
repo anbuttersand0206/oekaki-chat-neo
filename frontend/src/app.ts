@@ -6,6 +6,7 @@ import { BrushPanel } from './ui/BrushPanel';
 import { RoomUI } from './ui/RoomUI';
 import { SocketClient } from './network/SocketClient';
 import { AuthClient, AuthUser } from './network/AuthClient';
+import { parsePathToRoute, isProtectedRoute, isPublicOnlyRoute, AppRoute } from './router/Router';
 import { DrawOp, StrokeSettings, User, USER_COLORS } from './types';
 import { escapeHtml } from './utils';
 
@@ -62,20 +63,25 @@ export class App {
       document.getElementById('select-tolerance-val')!.textContent = tolSlider.value;
     });
 
-    // 認証状態に応じて初期画面を決定する
+    // セッション確認が完了するまでローディング画面を出したままにすることで、
+    // 保護ページのコンテンツが一瞬チラつくのを防ぐ。
+    // （#loading-screen は HTML でデフォルト表示、showScreen() 呼び出し時に hidden になる）
     this.currentUser = await this.auth.getMe();
-    if (this.currentUser) {
-      await this.showDashboard();
-    } else {
-      this.roomUI.showScreen('login');
-    }
+
+    // ブラウザの前後ボタンによる画面遷移もルーティングで制御する。
+    // popstate は pushState/replaceState では発火しないため、navigateTo() と独立して登録する。
+    window.addEventListener('popstate', () => { void this.applyRouting(); });
+
+    await this.applyRouting();
   }
 
   private setupRoomUIHandlers() {
     this.roomUI.onLogin = async (email, password) => {
       try {
         this.currentUser = await this.auth.login(email, password);
-        await this.showDashboard();
+        // ログイン成功後はダッシュボードへ遷移する。
+        // navigateTo が applyRouting を呼び、ダッシュボードのセットアップ（部屋一覧取得など）も実行される。
+        this.navigateTo('/dashboard');
       } catch (e: any) {
         this.roomUI.showLoginError(e.message ?? 'ログインに失敗しました');
       }
@@ -88,38 +94,30 @@ export class App {
     // 画面遷移の権限は App が持つ。RoomUI は表示のみを担い、遷移判断は App に委譲する。
     // これにより、将来メール認証フローなどを挟む場合も App 側だけ変更できる。
     this.roomUI.onGoToSignup = () => {
-      this.roomUI.showScreen('signup');
+      this.navigateTo('/signup');
     };
 
     this.roomUI.onGoToLogin = () => {
-      this.roomUI.showScreen('login');
+      this.navigateTo('/login');
     };
 
-    // 設定・退会画面へ遷移する前にフォームの現在値を最新の状態に揃える
     this.roomUI.onGoToSettings = () => {
-      if (this.currentUser) {
-        this.roomUI.fillAccountSettings(this.currentUser.username, this.currentUser.email);
-      }
-      this.roomUI.showScreen('settings');
+      this.navigateTo('/account-config');
     };
 
     this.roomUI.onGoToDeactivate = () => {
-      if (this.currentUser) {
-        this.roomUI.setupDeactivateForm(this.currentUser.hasPassword);
-      }
-      this.roomUI.showScreen('deactivate');
+      this.navigateTo('/withdrawal');
     };
 
     this.roomUI.onGoToDashboard = () => {
-      // ダッシュボードへ戻る際も最新の部屋一覧を取得する
-      void this.showDashboard();
+      this.navigateTo('/dashboard');
     };
 
     this.roomUI.onSignup = async (username, email, password) => {
       try {
         this.currentUser = await this.auth.register(username, email, password);
         // 登録成功時はそのままダッシュボードへ（サーバー側で自動ログイン済み）
-        await this.showDashboard();
+        this.navigateTo('/dashboard');
       } catch (e: any) {
         this.roomUI.showSignupError(e.message ?? '登録に失敗しました');
       }
@@ -128,7 +126,7 @@ export class App {
     this.roomUI.onUpdateProfile = async (username, email) => {
       try {
         this.currentUser = await this.auth.updateMe({ username, email });
-        // 成功後はヘッダーと設定フォームを更新値で上書きする
+        // 成功後はヘッダーと設定フォームを更新値で上書きする（画面遷移は不要）
         this.roomUI.setDashboardUser(this.currentUser.username);
         this.roomUI.fillAccountSettings(this.currentUser.username, this.currentUser.email);
         this.roomUI.showSettingsSuccess('profile', '変更を保存しました');
@@ -151,9 +149,10 @@ export class App {
     this.roomUI.onDeactivate = async (password) => {
       try {
         await this.auth.deleteMe(password || undefined);
-        // 退会完了 → セッションが消えているためログイン画面へ遷移する
+        // 退会完了 → セッションが消えているためログイン画面へ遷移する。
+        // replaceState で履歴を置き換え、戻るボタンで退会画面に戻れないようにする。
         this.currentUser = null;
-        this.roomUI.showScreen('login');
+        this.navigateTo('/login', { replace: true });
       } catch (e: any) {
         this.roomUI.showDeactivateError(e.message ?? '退会に失敗しました');
       }
@@ -162,7 +161,8 @@ export class App {
     this.roomUI.onLogout = async () => {
       await this.auth.logout();
       this.currentUser = null;
-      this.roomUI.showScreen('login');
+      // ログアウト後は履歴を置き換えて「戻る」でログイン済み画面に戻れないようにする
+      this.navigateTo('/login', { replace: true });
     };
 
     this.roomUI.onCreateRoom = async (roomId, password) => {
@@ -191,18 +191,143 @@ export class App {
     };
 
     this.roomUI.onLeaveRoom = () => {
-      this.socket.disconnect();
-      window.location.reload();
+      // ページリロードに頼らず、入室状態を明示的にクリーンアップしてダッシュボードへ戻る
+      this.exitRoom();
+      this.navigateTo('/dashboard');
     };
   }
+
+  // ── ルーティング ──────────────────────────────────────────────────────────────
+
+  /**
+   * URL を変更して対応する画面へ遷移する。
+   * pushState/replaceState はページをリロードしないため描画は中断されない。
+   * popstate は pushState では発火しないので、手動で applyRouting() を呼ぶ。
+   */
+  private navigateTo(path: string, options: { replace?: boolean } = {}): void {
+    // 同じパスへの重複遷移は履歴汚染の原因になるためスキップする
+    if (window.location.pathname === path && !options.replace) return;
+
+    if (options.replace) {
+      window.history.replaceState(null, '', path);
+    } else {
+      window.history.pushState(null, '', path);
+    }
+    void this.applyRouting();
+  }
+
+  /**
+   * 現在の URL を読み取り、認証状態に応じて表示すべき画面を決定する。
+   *
+   * ガード節の適用順序：
+   *   1. 未認証 + 保護ページ → /login にリダイレクト
+   *   2. 認証済み + /login・/signup → /dashboard にリダイレクト
+   *   3. 上記以外 → URL に対応した画面を表示
+   */
+  private async applyRouting(): Promise<void> {
+    const route          = parsePathToRoute(window.location.pathname);
+    const isAuthenticated = this.currentUser !== null;
+
+    // 部屋以外の画面へ移動する際、入室中の状態をクリーンアップする。
+    // ブラウザの戻るボタンで部屋から離脱した場合もここで後片付けする。
+    if (this.roomId && route.kind !== 'room') {
+      this.exitRoom();
+    }
+
+    // ガード節 1：未認証ユーザーが保護ページにアクセスした → /login へリダイレクト
+    if (isProtectedRoute(route) && !isAuthenticated) {
+      window.history.replaceState(null, '', '/login');
+      this.roomUI.showScreen('login');
+      return;
+    }
+
+    // ガード節 2：認証済みユーザーが /login や /signup にアクセスした → /dashboard へリダイレクト
+    if (isPublicOnlyRoute(route) && isAuthenticated) {
+      window.history.replaceState(null, '', '/dashboard');
+      await this.showDashboard();
+      return;
+    }
+
+    await this.showRouteScreen(route);
+  }
+
+  /** AppRoute に対応する画面のセットアップと表示を行う */
+  private async showRouteScreen(route: AppRoute): Promise<void> {
+    switch (route.kind) {
+      case 'login':          this.roomUI.showScreen('login');    break;
+      case 'signup':         this.roomUI.showScreen('signup');   break;
+      case 'dashboard':      await this.showDashboard();         break;
+      case 'account-config': this.showSettingsScreen();          break;
+      case 'withdrawal':     this.showWithdrawalScreen();        break;
+      case 'room':           this.handleRoomRoute(route.roomId); break;
+    }
+  }
+
+  /**
+   * アカウント設定画面を表示する。
+   * フォームを最新のユーザー情報で埋めてから画面を切り替える。
+   */
+  private showSettingsScreen(): void {
+    if (this.currentUser) {
+      this.roomUI.fillAccountSettings(this.currentUser.username, this.currentUser.email);
+    }
+    this.roomUI.showScreen('settings');
+  }
+
+  /**
+   * 退会画面を表示する。
+   * パスワードの有無（Google SSO 専用か否か）に応じてフォームを初期化してから切り替える。
+   */
+  private showWithdrawalScreen(): void {
+    if (this.currentUser) {
+      this.roomUI.setupDeactivateForm(this.currentUser.hasPassword);
+    }
+    this.roomUI.showScreen('deactivate');
+  }
+
+  /**
+   * /{roomId} への遷移を処理する。
+   * 入室中（Socket 接続済み）なら描画画面をそのまま維持する。
+   * リフレッシュや直接 URL アクセスの場合はパスワードが不明なため
+   * ダッシュボードへ転送し、部屋 ID だけ自動入力する。
+   */
+  private handleRoomRoute(roomId: string): void {
+    const isCurrentlyInRoom = this.roomId === roomId && this.socket.connected;
+    if (!isCurrentlyInRoom) {
+      // 入室中でないのにルーム URL へ来た → ダッシュボードへ転送してパスワード欄だけ案内する
+      const joinInput = document.getElementById('join-room-id') as HTMLInputElement | null;
+      if (joinInput) joinInput.value = roomId;
+      window.history.replaceState(null, '', '/dashboard');
+      void this.showDashboard();
+      return;
+    }
+    this.roomUI.showScreen('draw');
+  }
+
+  /**
+   * 入室状態を完全にクリーンアップする。
+   * CanvasEngine・同期タイマー・Socket 接続を解放し、roomId をリセットする。
+   * ブラウザ戻るボタン・退室ボタン・ページ遷移のすべてでこれを経由する。
+   */
+  private exitRoom(): void {
+    if (!this.roomId) return;
+
+    if (this.engine) this.engine.destroy();
+
+    if (this.canvasSyncTimer !== null) {
+      window.clearInterval(this.canvasSyncTimer);
+      this.canvasSyncTimer = null;
+    }
+
+    this.socket.disconnect();
+    this.roomId = '';
+  }
+
+  // ── ダッシュボード ────────────────────────────────────────────────────────────
 
   private async showDashboard() {
     if (this.currentUser) {
       this.roomUI.setDashboardUser(this.currentUser.username);
-      // 設定フォームに現在値を入れる（ダッシュボード表示のたびに最新値で上書き）
-      this.roomUI.fillAccountSettings(this.currentUser.username, this.currentUser.email);
-      // パスワードの有無に応じて退会フォームのパスワード欄を出し分ける
-      this.roomUI.setupDeactivateForm(this.currentUser.hasPassword);
     }
     // ログイン確定後のこのタイミングで接続する。
     // セッション Cookie がセット済みなので認証が通る。
@@ -242,6 +367,11 @@ export class App {
         this.users = users.map((u, i) => ({ ...u, color: USER_COLORS[i % USER_COLORS.length] }));
 
         this.showDrawScreen();
+
+        // 入室成功後、URL を /{roomId} に更新する。
+        // pushState はページをリロードしないため描画は継続される。
+        // showDrawScreen() で既に画面は切り替え済みのため applyRouting は呼ばない。
+        window.history.pushState(null, '', `/${roomId}`);
 
         if (brushSettings) this.brushPanel.restoreAllBrushConfigs(brushSettings);
         if (canvasState)   this.engine.loadStateDataUrl(canvasState);

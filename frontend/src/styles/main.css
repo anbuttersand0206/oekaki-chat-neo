@@ -121,6 +121,33 @@ html, body {
 .screen { display: none; width: 100%; height: 100%; }
 .screen.active { display: flex; flex-direction: column; }
 
+/* ── ローディング画面 ────────────────────────────────────────────────────────
+   JS 実行前から表示しておくことで、セッション確認中のチラつきを防ぐ。
+   showScreen() が呼ばれると .hidden クラスが付いて非表示になる。 */
+.loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--bg);
+}
+.loading-screen.hidden { display: none; }
+
+.loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: loading-spin 0.7s linear infinite;
+}
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ── Login Screen ── */
 #login-screen {
   align-items: center;
