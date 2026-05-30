@@ -717,28 +717,14 @@ WebSocket 接続確立時（`on_connect`）に Django セッション Cookie を
 
 ### 🟠 セキュリティ改善（重要・運用開始後）
 
-#### 5. セキュリティヘッダの追加
-
-**現状**: nginx / Django いずれもセキュリティヘッダが未設定。  
-**対応**: nginx.conf または Django の `SecurityMiddleware` で以下を追加する。
-
-| ヘッダ | 目的 |
-|--------|------|
-| `Content-Security-Policy` | XSS / コードインジェクション対策 |
-| `X-Frame-Options: DENY` | クリックジャッキング対策 |
-| `X-Content-Type-Options: nosniff` | MIME スニッフィング対策 |
-| `Strict-Transport-Security` | HTTPS 強制（HSTS）※ HTTPS 設定後 |
-
----
-
-#### 6. WebSocket 接続中のセッション再検証
+#### 5. WebSocket 接続中のセッション再検証
 
 **現状**: `on_connect` 時のみセッションを検証する。接続後にセッションが失効・強制ログアウトされても WebSocket は切断されない。  
 **対応**: 定期的（例: 5分ごと）に `sio.get_session()` からセッションキーを再取得・再検証し、無効なら `sio.disconnect()` を呼ぶ。
 
 ---
 
-#### 7. CSRF 保護の明示的な強化
+#### 6. CSRF 保護の明示的な強化
 
 **現状**: 全 API ビューに `@csrf_exempt` が付いており、`SameSite=Lax` + 同一オリジンからの `credentials: 'include'` で実質的に保護されている。  
 **問題**: `SameSite=Lax` はトップレベルナビゲーション（GET リダイレクト等）では Cookie を送るため完全ではない。  
@@ -746,7 +732,7 @@ WebSocket 接続確立時（`on_connect`）に Django セッション Cookie を
 
 ---
 
-#### 8. Username / Email Enumeration 対策
+#### 7. Username / Email Enumeration 対策
 
 **現状**: `register_view` が「このメールアドレスはすでに登録されています」「このユーザー名はすでに使われています」という個別のエラーを返す。  
 **問題**: 攻撃者がエラーレスポンスを使って既存のメールアドレス・ユーザー名を確認できる（ユーザー名列挙）。  
@@ -759,7 +745,7 @@ WebSocket 接続確立時（`on_connect`）に Django セッション Cookie を
 
 ---
 
-#### 9. Log Injection 対策
+#### 8. Log Injection 対策
 
 **現状**: `email`, `room_id` などユーザー由来の文字列をそのままログに埋め込んでいる。  
 ```python
@@ -772,7 +758,7 @@ logger.info(f'New room created: {room_id}')
 
 ---
 
-#### 10. `SOCIALACCOUNT_LOGIN_ON_GET` のリスク
+#### 9. `SOCIALACCOUNT_LOGIN_ON_GET` のリスク
 
 **現状**: `SOCIALACCOUNT_LOGIN_ON_GET = True` により、`/accounts/google/login/` への GET リクエストだけで OAuth フローが開始される。  
 **問題**: 細工された URL をクリックさせるだけで、意図しない Google アカウントとの連携が開始される（Login CSRF に近い挙動）。allauth の CSRF トークン検証が一定の保護をしているが、完全ではない。  
@@ -783,14 +769,14 @@ logger.info(f'New room created: {room_id}')
 
 ### 🟡 機能・UX
 
-#### 8. 部屋の管理機能
+#### 10. 部屋の管理機能
 
 現在、部屋の作成者と参加者に区別がない。  
 - 部屋のパスワード変更
 - 部屋の手動削除（作成者限定）
 - 最大人数のカスタマイズ（現在は固定 5 人）
 
-#### 9. ブラシプリセットの複数保存
+#### 11. ブラシプリセットの複数保存
 
 現在、ブラシ種別ごとに設定は 1 つだけ保存される。  
 ユーザーが名前を付けて複数のプリセットを保存・切り替えられると便利。  
@@ -800,19 +786,19 @@ logger.info(f'New room created: {room_id}')
 
 ### 🔵 技術的負債
 
-#### 11. レートリミッターの外部化
+#### 12. レートリミッターの外部化
 
 **現状**: `_create_attempts`（部屋作成）・`join_attempts`（入室）ともにプロセス内インメモリ。  
 **問題**: 複数プロセス・複数インスタンスで動かすとリミッターが機能しない。  
 **対応**: Redis または PostgreSQL ベースの共有カウンターに移行する。
 
-#### 12. チャット履歴の扱い
+#### 13. チャット履歴の扱い
 
 **現状**: 部屋削除時にチャット履歴も `CASCADE` で全削除される。  
 また 1 部屋に最大 50 件しか復元しない。  
 **対応候補**: 部屋削除後も履歴を一定期間保持する、ページネーションで全件取得できるようにする。
 
-#### 13. Profile モデルの追加
+#### 14. Profile モデルの追加
 
 `accounts/models.py` に TODO コメントあり。プロフィール画像など任意属性の置き場所として、User への OneToOneField でぶら下げる設計にする予定（`db_design_guide_v2.md §3.1` 参照）。
 
