@@ -802,6 +802,16 @@ logger.info(f'New room created: {room_id}')
 
 `accounts/models.py` に TODO コメントあり。プロフィール画像など任意属性の置き場所として、User への OneToOneField でぶら下げる設計にする予定（`db_design_guide_v2.md §3.1` 参照）。
 
+#### 15. テストコードの整備
+
+現状、バックエンド・フロントエンドともにテストが存在しない。
+
+| 対象 | 優先 | 内容 |
+|------|------|------|
+| バックエンド API | 高 | 認証エンドポイント（登録・ログイン・ログアウト・me）と部屋 API を `pytest-django` で単体・統合テスト |
+| Socket.IO ハンドラ | 中 | `join_room` の認証チェック・満員拒否・パスワード照合などを `python-socketio` のテストクライアントで検証 |
+| フロントエンド | 低 | `FloodFill`・`BrushEngine` など副作用のない純粋関数を `Vitest` で単体テスト |
+
 ---
 
 ### ⚪ 将来的な拡張
