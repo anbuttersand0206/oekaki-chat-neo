@@ -143,3 +143,47 @@ CORS_ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get('CORS_ORIGIN', 'http://localhost:8080').split(',') if o.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
+
+# ── ロギング ──────────────────────────────────────────────────────────────────
+# 全ハンドラで JsonFormatter を使い、Log Injection をフォーマット層で無効化する。
+# ユーザー入力は extra= フィールドとして渡し、json.dumps の制御文字エスケープで保護する。
+# disable_existing_loggers=False で Django 標準ロガーは残しつつ、
+# アプリ固有ロガーだけ INFO 以上で取得する（propagate=False で二重出力を防ぐ）。
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'json': {
+            '()': 'common.logging.JsonFormatter',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'json',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        # Django フレームワーク自体のノイズを抑えるため WARNING 以上のみ出す
+        'level': 'WARNING',
+    },
+    'loggers': {
+        'accounts': {
+            'handlers': ['console'],
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            # root に propagate しないことで二重出力を防ぐ
+            'propagate': False,
+        },
+        'rooms': {
+            'handlers': ['console'],
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'propagate': False,
+        },
+        'common': {
+            'handlers': ['console'],
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'propagate': False,
+        },
+    },
+}

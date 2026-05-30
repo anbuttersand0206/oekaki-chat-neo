@@ -512,6 +512,8 @@ oekaki-chat-neo/
 │   │   ├── settings.py           # 設定（DB・CORS・認証・SECRET_KEY を env から取得）
 │   │   ├── urls.py
 │   │   └── asgi.py               # uvicorn エントリポイント（Socket.IO + Django 合成）
+│   ├── common/                   # 共有ユーティリティ（アプリをまたぐ下位問題）
+│   │   └── rate_limit.py         # IP ベースのインメモリレート制限（get_client_ip / is_rate_limited）
 │   ├── accounts/                 # 認証アプリ
 │   │   ├── models.py             # カスタムユーザーモデル（AbstractUser 継承）
 │   │   ├── views.py              # POST /api/auth/login・logout、GET /api/auth/me
@@ -637,6 +639,23 @@ WebSocket 接続確立時（`on_connect`）に Django セッション Cookie を
 
 ---
 
+## レート制限
+
+すべての制限は **IP アドレス単位・インメモリ**で管理しています。  
+実装は `backend/common/rate_limit.py` の `is_rate_limited()` に集約されており、各ビューが専用のストア（dict）と設定値を渡して呼び出します。
+
+| エンドポイント | ウィンドウ | 上限 | 目的 |
+|---|---|---|---|
+| `POST /api/auth/login` | 15 分 | 10 回 | ブルートフォース攻撃・クレデンシャルスタッフィング対策 |
+| `POST /api/auth/register` | 60 分 | 5 回 | スパム登録・リソース枯渇攻撃対策 |
+| `POST /api/rooms` | 15 分 | 20 回 | 部屋名の総当たり・悪用対策 |
+
+上限を超えると HTTP **429 Too Many Requests** を返します。
+
+> **注意（マルチプロセス構成）**: Gunicorn 複数ワーカーなど複数プロセスで動かすと、各プロセスが独立したカウンタを持つためレート制限が実質的に緩くなります。本番でスケールアウトする場合は Redis ベースの共有カウンターへの移行を検討してください（[TODO 10](#10-レートリミッターの外部化) 参照）。
+
+---
+
 ## Socket.IO イベント一覧
 
 > Socket.IO 接続時にセッション Cookie を検証します。未ログインの場合は接続が拒否されます。
@@ -687,27 +706,14 @@ WebSocket 接続確立時（`on_connect`）に Django セッション Cookie を
 
 ---
 
-#### 2. ログイン・新規会員登録 API のレート制限
-
-**現状**: `POST /api/auth/login` と `POST /api/auth/register` の両方にレート制限がない。  
-部屋作成（`POST /api/rooms`）には `_is_create_rate_limited()` が実装されているが、認証系 API は未対応。  
-**問題**:
-- ログイン: ブルートフォース攻撃・クレデンシャルスタッフィングに無防備
-- 新規登録: 大量アカウント作成攻撃（スパム登録・リソース枯渇）が可能
-
-**対応方針**: `views.py` の `_is_create_rate_limited()` を汎用関数化し、両エンドポイントに適用する。  
-またはアカウントロック（N 回連続失敗で一時ロック）を実装する。
-
----
-
-#### 3. パスワードリセット機能
+#### 2. パスワードリセット機能
 
 **現状**: パスワードを忘れたユーザーが自力でリセットする手段がない（管理者が `changepassword` コマンドを叩くしかない）。  
 **対応方針**: allauth 標準の `password_reset` フロー（`/accounts/password/reset/`）を有効化する、またはカスタム API（`POST /api/auth/password-reset`）を実装する。
 
 ---
 
-#### 4. SESSION_COOKIE_SECURE（HTTPS 環境）
+#### 3. SESSION_COOKIE_SECURE（HTTPS 環境）
 
 **現状**: `SESSION_COOKIE_SECURE` 未設定（= `False`）のため HTTP 通信でも Cookie が送信される。  
 **対応**: HTTPS 環境にデプロイする際に `SESSION_COOKIE_SECURE = True` を設定する。  
@@ -717,14 +723,14 @@ WebSocket 接続確立時（`on_connect`）に Django セッション Cookie を
 
 ### 🟠 セキュリティ改善（重要・運用開始後）
 
-#### 5. WebSocket 接続中のセッション再検証
+#### 4. WebSocket 接続中のセッション再検証
 
 **現状**: `on_connect` 時のみセッションを検証する。接続後にセッションが失効・強制ログアウトされても WebSocket は切断されない。  
 **対応**: 定期的（例: 5分ごと）に `sio.get_session()` からセッションキーを再取得・再検証し、無効なら `sio.disconnect()` を呼ぶ。
 
 ---
 
-#### 6. CSRF 保護の明示的な強化
+#### 5. CSRF 保護の明示的な強化
 
 **現状**: 全 API ビューに `@csrf_exempt` が付いており、`SameSite=Lax` + 同一オリジンからの `credentials: 'include'` で実質的に保護されている。  
 **問題**: `SameSite=Lax` はトップレベルナビゲーション（GET リダイレクト等）では Cookie を送るため完全ではない。  
@@ -732,7 +738,7 @@ WebSocket 接続確立時（`on_connect`）に Django セッション Cookie を
 
 ---
 
-#### 7. Username / Email Enumeration 対策
+#### 6. Username / Email Enumeration 対策
 
 **現状**: `register_view` が「このメールアドレスはすでに登録されています」「このユーザー名はすでに使われています」という個別のエラーを返す。  
 **問題**: 攻撃者がエラーレスポンスを使って既存のメールアドレス・ユーザー名を確認できる（ユーザー名列挙）。  
@@ -745,20 +751,7 @@ WebSocket 接続確立時（`on_connect`）に Django セッション Cookie を
 
 ---
 
-#### 8. Log Injection 対策
-
-**現状**: `email`, `room_id` などユーザー由来の文字列をそのままログに埋め込んでいる。  
-```python
-logger.info(f'新規ユーザーが登録されました: {user.email}')
-logger.info(f'New room created: {room_id}')
-```
-**問題**: 改行コード（`\n`・`\r`）を含む入力でログエントリを偽造できる（Log Injection）。  
-**現状のリスク軽減**: `room_id` は regex でチェック済みで改行不可。`email` は `strip().lower()` 処理済みだが改行除去はしていない。  
-**対応**: ログに渡す前に `value.replace('\n', '\\n').replace('\r', '\\r')` でサニタイズするか、構造化ログ（JSON Lines 形式）に移行してインジェクション自体を無効化する。
-
----
-
-#### 9. `SOCIALACCOUNT_LOGIN_ON_GET` のリスク
+#### 7. `SOCIALACCOUNT_LOGIN_ON_GET` のリスク
 
 **現状**: `SOCIALACCOUNT_LOGIN_ON_GET = True` により、`/accounts/google/login/` への GET リクエストだけで OAuth フローが開始される。  
 **問題**: 細工された URL をクリックさせるだけで、意図しない Google アカウントとの連携が開始される（Login CSRF に近い挙動）。allauth の CSRF トークン検証が一定の保護をしているが、完全ではない。  
@@ -769,14 +762,14 @@ logger.info(f'New room created: {room_id}')
 
 ### 🟡 機能・UX
 
-#### 10. 部屋の管理機能
+#### 8. 部屋の管理機能
 
 現在、部屋の作成者と参加者に区別がない。  
 - 部屋のパスワード変更
 - 部屋の手動削除（作成者限定）
 - 最大人数のカスタマイズ（現在は固定 5 人）
 
-#### 11. ブラシプリセットの複数保存
+#### 9. ブラシプリセットの複数保存
 
 現在、ブラシ種別ごとに設定は 1 つだけ保存される。  
 ユーザーが名前を付けて複数のプリセットを保存・切り替えられると便利。  
@@ -786,23 +779,23 @@ logger.info(f'New room created: {room_id}')
 
 ### 🔵 技術的負債
 
-#### 12. レートリミッターの外部化
+#### 10. レートリミッターの外部化
 
-**現状**: `_create_attempts`（部屋作成）・`join_attempts`（入室）ともにプロセス内インメモリ。  
-**問題**: 複数プロセス・複数インスタンスで動かすとリミッターが機能しない。  
+**現状**: `common/rate_limit.py` に集約された `is_rate_limited()` で、ログイン・新規会員登録・部屋作成の 3 エンドポイントをプロセス内インメモリで制限している。入室（`join_room`）の試行カウンターも同様にインメモリ。  
+**問題**: Gunicorn 複数ワーカー / 複数インスタンスで動かすと各プロセスが独立したカウンタを持ち、実効的な制限が緩くなる。  
 **対応**: Redis または PostgreSQL ベースの共有カウンターに移行する。
 
-#### 13. チャット履歴の扱い
+#### 11. チャット履歴の扱い
 
 **現状**: 部屋削除時にチャット履歴も `CASCADE` で全削除される。  
 また 1 部屋に最大 50 件しか復元しない。  
 **対応候補**: 部屋削除後も履歴を一定期間保持する、ページネーションで全件取得できるようにする。
 
-#### 14. Profile モデルの追加
+#### 12. Profile モデルの追加
 
 `accounts/models.py` に TODO コメントあり。プロフィール画像など任意属性の置き場所として、User への OneToOneField でぶら下げる設計にする予定（`db_design_guide_v2.md §3.1` 参照）。
 
-#### 15. テストコードの整備
+#### 13. テストコードの整備
 
 現状、バックエンド・フロントエンドともにテストが存在しない。
 

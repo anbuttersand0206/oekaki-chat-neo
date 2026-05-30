@@ -16,6 +16,8 @@ Desktop.ini
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
+.venv/
+venv/
 *.pyo
 *.pyd
 .Python
@@ -58,6 +60,7 @@ frontend/dist/
 # ── Logs ──────────────────────────────────────────────────────────────────────
 logs/
 *.log
+!documents/logs/
 
 # ── Docker volumes / runtime state ───────────────────────────────────────────
 *.pid

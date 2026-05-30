@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import re
-import time
 from typing import Any
 
 import bcrypt
@@ -11,6 +10,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 
+from common.rate_limit import get_client_ip, is_rate_limited
 from .models import Room, UserRoom
 from .sockets import active_users
 
@@ -19,28 +19,11 @@ logger = logging.getLogger(__name__)
 _MIN_PASSWORD_LEN = 8
 _MAX_PASSWORD_LEN = 32
 
-# インメモリのレート制限（POST /api/rooms：IP ごとに 15 分間で最大 20 回）。
-# 部屋作成は無制限だとブルートフォース的な悪用が想定されるため設けた。
-# DB ではなくインメモリで管理するのは、低頻度操作なので永続化コストに見合わないため。
-_create_attempts: dict[str, list[float]] = {}
-# エントリが際限なく増えないよう IP 種別ごとの上限を設ける
-_MAX_RATE_ENTRIES = 10_000
-
-
-def _is_create_rate_limited(ip: str) -> bool:
-    now = time.time()
-    window_seconds = 15 * 60
-    recent_attempts = [t for t in _create_attempts.get(ip, []) if now - t < window_seconds]
-    _create_attempts[ip] = recent_attempts
-    if len(recent_attempts) >= 20:
-        return True
-    if len(_create_attempts) > _MAX_RATE_ENTRIES:
-        # 枯渇を防ぐため期限切れエントリを都度刈り取る
-        stale_ips = [k for k, v in _create_attempts.items() if not v]
-        for k in stale_ips:
-            del _create_attempts[k]
-    _create_attempts[ip].append(now)
-    return False
+# 部屋作成のレート制限（IP ごとに 15 分間で最大 20 回）。
+# 無制限だとブルートフォース的な悪用や部屋名の総当たりが想定されるため設けた。
+_room_create_attempts: dict[str, list[float]] = {}
+_ROOM_CREATE_WINDOW_SECONDS = 15 * 60
+_ROOM_CREATE_MAX_ATTEMPTS = 20
 
 
 @require_GET
@@ -73,12 +56,8 @@ async def room_create(request: HttpRequest) -> JsonResponse:
     if not user.is_authenticated:
         return JsonResponse({'error': 'ログインしてください'}, status=401)
 
-    # リバースプロキシ経由の場合は X-Real-IP / X-Forwarded-For を優先する
-    ip = (request.META.get('HTTP_X_REAL_IP')
-          or request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
-          or request.META.get('REMOTE_ADDR', ''))
-
-    if _is_create_rate_limited(ip):
+    ip = get_client_ip(request)
+    if is_rate_limited(ip, _room_create_attempts, _ROOM_CREATE_WINDOW_SECONDS, _ROOM_CREATE_MAX_ATTEMPTS):
         return JsonResponse(
             {'error': 'リクエストが多すぎます。しばらくしてから試してください。'}, status=429
         )
@@ -118,9 +97,9 @@ async def room_create(request: HttpRequest) -> JsonResponse:
             password_hash=password_hash,
             last_emptied_at=timezone.now()
         )
-        logger.info(f'New room created: {room_id}')
+        logger.info('部屋を作成しました', extra={'room_id': room_id})
     except Exception as e:
-        logger.error(f'[room_create] Failed to create room {room_id}: {e}', exc_info=True)
+        logger.error('[room_create] 部屋の作成に失敗しました', extra={'room_id': room_id}, exc_info=True)
         return JsonResponse({'error': '部屋の作成に失敗しました'}, status=500)
 
     return JsonResponse({'id': room_id}, status=201)

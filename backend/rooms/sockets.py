@@ -56,9 +56,9 @@ async def _cleanup_loop() -> None:
             deleted_old, _ = await Room.objects.filter(created_at__lt=cutoff_age).adelete()
 
             if deleted_empty or deleted_old:
-                logger.info(f'[cleanup] 削除完了 (空室:{deleted_empty}, 老朽:{deleted_old})')
+                logger.info('[cleanup] 削除完了', extra={'deleted_empty': deleted_empty, 'deleted_old': deleted_old})
         except Exception as e:
-            logger.error(f'[cleanup] クリーンアップ中にエラーが発生しました: {e}', exc_info=True)
+            logger.error('[cleanup] クリーンアップ中にエラーが発生しました', exc_info=True)
 
 
 async def _get_session_user(cookie_str: str):
@@ -86,7 +86,8 @@ async def _get_session_user(cookie_str: str):
         User = get_user_model()
         return await User.objects.aget(id=int(auth_user_id), is_active=True)
     except Exception as e:
-        logger.error(f'[get_session_user] Error: {e}')
+        # セッション取得失敗はよくある（期限切れ・改ざんなど）ため exc_info でトレースを残す
+        logger.error('[get_session_user] セッション取得中にエラーが発生しました', exc_info=True)
         return None
 
 
@@ -136,7 +137,7 @@ async def on_connect(sid: str, environ: dict, auth: Optional[Any] = None) -> Non
             'username': user.username,
         })
     else:
-        logger.warning(f'[connect] 未認証の接続を許可しました（操作時に認証チェック）: sid={sid}')
+        logger.warning('[connect] 未認証の接続を許可しました（操作時に認証チェック）', extra={'sid': sid})
 
     await sio.save_session(sid, session_data)
     # 接続を拒否せず、Room 参加時に auth_user_id の有無で権限チェックを行う。
@@ -257,7 +258,7 @@ async def on_join_room(sid: str, data: Any) -> None:
         }, to=sid)
         await sio.emit('user_joined', {'id': user_id, 'name': username}, room=room_id, skip_sid=sid)
     except Exception as e:
-        logger.error(f'[on_join_room] 部屋 {room_id} への参加中にエラーが発生しました: {e}', exc_info=True)
+        logger.error('[on_join_room] 部屋への参加中にエラーが発生しました', extra={'room_id': room_id}, exc_info=True)
         await sio.emit('room_error', {'code': 'INTERNAL_ERROR', 'message': '内部エラーが発生しました'}, to=sid)
 
 
@@ -295,7 +296,7 @@ async def on_canvas_state(sid: str, data: dict) -> None:
     try:
         await Room.objects.filter(id=room_id).aupdate(canvas_state=image_data)
     except Exception as e:
-        logger.error(f'[canvas_state] 部屋 {room_id} の DB 更新に失敗しました: {e}', exc_info=True)
+        logger.error('[canvas_state] DB 更新に失敗しました', extra={'room_id': room_id}, exc_info=True)
 
 
 async def on_cursor_move(sid: str, data: dict) -> None:
@@ -331,7 +332,7 @@ async def on_chat_message(sid: str, data: Any) -> None:
             message=message,
         )
     except Exception as e:
-        logger.error(f'[chat_message] 部屋 {room_id} への DB 保存に失敗しました: {e}', exc_info=True)
+        logger.error('[chat_message] DB 保存に失敗しました', extra={'room_id': room_id}, exc_info=True)
         return
     await sio.emit('chat_message', {
         'userId': str(auth_user_id),
@@ -358,7 +359,7 @@ async def on_brush_settings(sid: str, data: Any) -> None:
             defaults={'settings': settings},
         )
     except Exception as e:
-        logger.error(f'[brush_settings] ユーザー {auth_user_id} の DB 保存に失敗しました: {e}', exc_info=True)
+        logger.error('[brush_settings] DB 保存に失敗しました', extra={'user_id': auth_user_id}, exc_info=True)
 
 
 async def on_disconnect(sid: str, reason: Optional[str] = None) -> None:
