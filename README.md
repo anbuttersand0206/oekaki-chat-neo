@@ -41,7 +41,7 @@
 
 アカウントの削除確認画面。パスワード入力と同意チェックボックスにより、誤操作を防ぎます。
 
-![退会画面](documents/screenshots/withdrawls.png)
+![退会画面](documents/screenshots/withdrawal.png)
 
 ---
 
