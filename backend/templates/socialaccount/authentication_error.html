@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="room-logo">
+  <svg width="40" height="40" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+    <circle cx="24" cy="24" r="22" fill="#1e1e2e" stroke="#5b8fff" stroke-width="2"/>
+    <path d="M14 30 Q18 14 24 18 Q30 22 34 14" stroke="#5b8fff" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+    <circle cx="34" cy="14" r="3" fill="#ff6b9d"/>
+  </svg>
+  <h1>お絵描きチャット</h1>
+</div>
+
+{% if error_type == 'email_taken' %}
+  <div class="error-msg">
+    このメールアドレスはすでに登録されています。<br>
+    メールアドレスとパスワードでログインするか、別の Google アカウントをご利用ください。
+  </div>
+{% else %}
+  <div class="error-msg">
+    Google アカウントとの連携中にエラーが発生しました。しばらく経ってから再度お試しください。
+  </div>
+{% endif %}
+
+<div class="auth-switch">
+  <a href="/">ログイン画面へ戻る</a>
+</div>
+
+{% endblock %}

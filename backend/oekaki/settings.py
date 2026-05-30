@@ -85,6 +85,13 @@ AUTHENTICATION_BACKENDS = [
 
 SESSION_ENGINE = 'django.contrib.sessions.backends.db'
 SESSION_COOKIE_HTTPONLY = True
+# Strict ではなく Lax を採用している理由:
+#   全 API ビューは状態変更を POST / PATCH / DELETE のみで行い、GET は読み取り専用。
+#   SameSite=Lax はクロスサイトからの POST / PATCH / DELETE への Cookie 送信を遮断するため、
+#   このアプリの CSRF リスクは Strict と同等に抑えられている。
+#   一方 Strict にすると Google OAuth コールバック（accounts.google.com → アプリへの
+#   クロスサイト GET リダイレクト）でセッション Cookie が届かなくなり、allauth が
+#   セッションに保存した OAuth state を取り出せず Google SSO が壊れる。
 SESSION_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30日
 # スライディング・ウィンドウ方式: リクエストのたびに有効期限を SESSION_COOKIE_AGE 分延長する
@@ -101,9 +108,18 @@ ACCOUNT_AUTHENTICATION_METHOD = 'email'
 #   変更後は accounts/views.py の register_view も allauth の確認メール
 #   送信フローと整合させる必要がある。（README §TODO 参照）
 ACCOUNT_EMAIL_VERIFICATION = 'optional'
-ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'http' if DEBUG else 'https'
+# allauth が OAuth コールバック URL を組み立てる際に使うプロトコル。
+# DEBUG だけで判定すると Docker ローカル環境（DEBUG=False・HTTP）で
+# allauth が https:// の redirect_uri を Google に送り redirect_uri_mismatch が発生する。
+# そのため環境変数で明示的に上書きできるようにし、docker-compose 側でデフォルト 'http' を渡す。
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = os.environ.get(
+    'ACCOUNT_DEFAULT_HTTP_PROTOCOL',
+    'http' if DEBUG else 'https',
+)
 
 SOCIALACCOUNT_AUTO_SIGNUP = True
+# 登録済みメールアドレスでの Google SSO を拒否するカスタムアダプター
+SOCIALACCOUNT_ADAPTER = 'accounts.adapters.CustomSocialAccountAdapter'
 SOCIALACCOUNT_LOGIN_ON_GET = True   # 「ソーシャルログイン確認」中間ページをスキップする
 SOCIALACCOUNT_STORE_TOKENS = False
 

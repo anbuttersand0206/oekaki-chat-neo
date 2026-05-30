@@ -5,15 +5,164 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>お絵描きチャット</title>
   <style>
-    body { font-family: system-ui, sans-serif; background: #111114; color: #d8d8e8;
-           display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-    .card { background: rgba(26,26,36,.9); border: 1px solid #42424e; border-radius: 12px;
-            padding: 36px 40px; max-width: 400px; width: 100%; text-align: center; }
-    h2 { color: #5b8fff; margin-bottom: 16px; }
-    p  { color: #8888a0; font-size: 14px; }
-    a  { color: #5b8fff; }
-    .error { color: #ff8080; background: rgba(255,80,80,.12); border: 1px solid rgba(255,80,80,.3);
-             border-radius: 5px; padding: 10px; margin-top: 16px; font-size: 13px; }
+    /* ── CSS 変数（SPA の main.css と揃える） ───────────── */
+    :root {
+      --bg-root:  #111114;
+      --bg-input: #2a2a32;
+      --border:   #36363f;
+      --border2:  #42424e;
+      --text:     #d8d8e8;
+      --text2:    #8888a0;
+      --accent:   #5b8fff;
+      --accent2:  #7aa3ff;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg-root:  #f2f2f5;
+        --bg-input: #d8d8e2;
+        --border:   #c4c4d0;
+        --border2:  #b0b0c0;
+        --text:     #1a1a2e;
+        --text2:    #56566e;
+        --accent:   #2a60d2;
+        --accent2:  #4476e8;
+      }
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', 'Hiragino Sans', 'Meiryo', system-ui, sans-serif;
+      font-size: 13px;
+      background: var(--bg-root);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    /* SPA のグリッド背景を疑似要素で再現する */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image:
+        linear-gradient(rgba(91,143,255,.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(91,143,255,.06) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+    }
+
+    /* ── カード（SPA の .room-dialog に対応） ─────────── */
+    .card {
+      position: relative;
+      background: rgba(26,26,36,.9);
+      border: 1px solid var(--border2);
+      border-radius: 12px;
+      padding: 36px 40px;
+      width: 380px;
+      max-height: 90vh;
+      overflow-y: auto;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 24px 64px rgba(0,0,0,.6);
+    }
+
+    /* ── ロゴ（SPA の .room-logo に対応） ─────────────── */
+    .room-logo {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+    .room-logo h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      background: linear-gradient(135deg, var(--accent), #ff6b9d);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    /* ── フォームフィールド（SPA の .field-group に対応） */
+    .field-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .field-group + .field-group { margin-top: 16px; }
+
+    .field-group label {
+      font-size: 11px;
+      color: var(--text2);
+    }
+    .field-group .hint {
+      font-size: 10px;
+      color: var(--text2);
+      opacity: .7;
+    }
+    /* allauth が生成する <input> は CSS セレクターで一括スタイル適用する */
+    .field-group input {
+      width: 100%;
+      padding: 8px 10px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .field-group input:focus { border-color: var(--accent); }
+
+    /* ── ボタン（SPA の .primary-btn に対応） ─────────── */
+    .primary-btn {
+      display: block;
+      width: 100%;
+      padding: 10px;
+      margin-top: 24px;
+      background: var(--accent);
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .primary-btn:hover { background: var(--accent2); }
+
+    /* ── エラー（SPA の .error-msg に対応） ────────────── */
+    .error-msg {
+      margin-top: 8px;
+      padding: 8px 12px;
+      background: rgba(255,80,80,.12);
+      border: 1px solid rgba(255,80,80,.3);
+      border-radius: 5px;
+      color: #ff8080;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    /* ── サブテキスト・ナビゲーション ─────────────────── */
+    .hint-text {
+      font-size: 13px;
+      color: var(--text2);
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
+    .auth-switch {
+      margin-top: 20px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text2);
+    }
+    a, .link-btn {
+      color: var(--accent);
+      text-decoration: underline;
+      font-size: 12px;
+    }
+    a:hover, .link-btn:hover { color: var(--accent2); }
   </style>
 </head>
 <body>
