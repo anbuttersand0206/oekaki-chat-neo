@@ -1,14 +1,62 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>アカウント作成</h2>
-<p>{{ account.user.email }} でアカウントを作成します。</p>
-<form method="post">
+
+<div class="room-logo">
+  <svg width="40" height="40" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+    <circle cx="24" cy="24" r="22" fill="#1e1e2e" stroke="#5b8fff" stroke-width="2"/>
+    <path d="M14 30 Q18 14 24 18 Q30 22 34 14" stroke="#5b8fff" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+    <circle cx="34" cy="14" r="3" fill="#ff6b9d"/>
+  </svg>
+  <h1>ユーザー名を設定</h1>
+</div>
+
+{# Google から提供されたメールアドレスを表示してユーザーに文脈を伝える #}
+{% with email=account.user.email %}
+<p class="hint-text">
+  {% if email %}
+    Google アカウント（{{ email }}）でログインします。<br>
+  {% else %}
+    Google アカウントでログインします。<br>
+  {% endif %}
+  アプリで使うユーザー名を設定してください。
+</p>
+{% endwith %}
+
+<form method="post" action="{% url 'socialaccount_signup' %}">
   {% csrf_token %}
-  {{ form.as_p }}
-  <button type="submit"
-    style="background:#5b8fff;color:#fff;border:none;border-radius:6px;padding:10px 20px;cursor:pointer;font-size:14px;margin-top:12px;width:100%">
-    作成する
-  </button>
+
+  <div class="field-group">
+    <label>ユーザー名 <span class="hint">英数字・_ ・- 2〜20文字</span></label>
+    {{ form.username }}
+    {% for error in form.username.errors %}
+      <div class="error-msg">{{ error }}</div>
+    {% endfor %}
+  </div>
+
+  {# メールアドレスが编集可能フィールドとして含まれる場合のみ表示する #}
+  {% if form.email %}
+  <div class="field-group">
+    <label>メールアドレス</label>
+    {{ form.email }}
+    {% for error in form.email.errors %}
+      <div class="error-msg">{{ error }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if form.non_field_errors %}
+  <div class="error-msg">
+    {% for error in form.non_field_errors %}{{ error }}{% endfor %}
+  </div>
+  {% endif %}
+
+  {{ redirect_field }}
+
+  <button type="submit" class="primary-btn">登録する</button>
 </form>
-<p style="margin-top:16px"><a href="/">キャンセル</a></p>
+
+<div class="auth-switch">
+  <a href="/">キャンセルしてログイン画面へ</a>
+</div>
+
 {% endblock %}

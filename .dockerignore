@@ -1,6 +1,33 @@
-backend/node_modules
-backend/src
-backend/package.json
-backend/package-lock.json
-frontend/node_modules
-frontend/dist
+# ── Git ──────────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+.dockerignore
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# ビルドコンテキストにシークレットが混入しないよう .env 系は明示的に除外する
+.env
+.env.*
+!.env.example
+
+# ── Documentation ────────────────────────────────────────────────────────────
+# スクリーンショット PNG など不要なファイルを除外する
+documents/
+**/*.md
+
+# ── Python bytecode ──────────────────────────────────────────────────────────
+# COPY backend/ . でバイトコードがイメージに混入しないよう除外する
+**/__pycache__/
+**/*.py[cod]
+
+# ── Node.js ──────────────────────────────────────────────────────────────────
+backend/node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# ── Editor / OS ──────────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

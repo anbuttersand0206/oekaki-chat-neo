@@ -7,12 +7,30 @@ from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
+from common.rate_limit import get_client_ip, is_rate_limited
+
 logger = logging.getLogger(__name__)
 
 _MIN_PASSWORD_LEN = 8
 _MAX_PASSWORD_LEN = 32
 _MIN_USERNAME_LEN = 2
 _MAX_USERNAME_LEN = 20
+
+# ログインのレート制限（IP ごとに 15 分間で最大 10 回）。
+# ブルートフォース攻撃・クレデンシャルスタッフィング対策として設けた。
+# 10 回という値は、正規ユーザーがタイプミスをしても十分余裕があり、
+# かつ総当たりには不十分な試行回数として業界標準に近い数値を採用している。
+_login_attempts: dict[str, list[float]] = {}
+_LOGIN_WINDOW_SECONDS = 15 * 60
+_LOGIN_MAX_ATTEMPTS = 10
+
+# 新規登録のレート制限（IP ごとに 60 分間で最大 5 回）。
+# スパム登録・リソース枯渇攻撃の対策として設けた。
+# 正規ユーザーが 1 時間に 5 回以上登録することは想定しないため、
+# ログインより厳しい制限を設けている。
+_register_attempts: dict[str, list[float]] = {}
+_REGISTER_WINDOW_SECONDS = 60 * 60
+_REGISTER_MAX_ATTEMPTS = 5
 
 
 def _serialize_user(user) -> dict:
@@ -44,7 +62,11 @@ def _validate_username(username: str) -> str | None:
 @csrf_exempt
 @require_POST
 def register_view(request: HttpRequest) -> JsonResponse:
-    """新規ユーザー登録。処理の流れ：入力バリデーション → 重複確認 → ユーザー作成 → 自動ログイン。"""
+    """新規ユーザー登録。処理の流れ：レート制限 → 入力バリデーション → 重複確認 → ユーザー作成 → 自動ログイン。"""
+    ip = get_client_ip(request)
+    if is_rate_limited(ip, _register_attempts, _REGISTER_WINDOW_SECONDS, _REGISTER_MAX_ATTEMPTS):
+        return JsonResponse({'error': 'リクエストが多すぎます。しばらくしてから試してください。'}, status=429)
+
     try:
         body = json.loads(request.body)
     except (json.JSONDecodeError, ValueError):
@@ -87,7 +109,8 @@ def register_view(request: HttpRequest) -> JsonResponse:
         )
     except Exception as e:
         # DB 制約違反など想定外のエラーをまとめてログに記録する
-        logger.error(f'[register] ユーザー {email} の作成に失敗しました: {e}', exc_info=True)
+        # email をフィールドに分離するのは Log Injection 対策（extra= 経由で json.dumps がエスケープ）
+        logger.error('[register] ユーザーの作成に失敗しました', extra={'email': email}, exc_info=True)
         return JsonResponse({'error': 'アカウントの作成に失敗しました'}, status=500)
 
     # TODO: メール認証を実装する（本番運用前に必須）
@@ -102,13 +125,17 @@ def register_view(request: HttpRequest) -> JsonResponse:
     # allauth のバックエンドを明示しないと login() が AUTHENTICATION_BACKENDS の
     # 設定を解決できずに AttributeError を起こすため、backend を指定している。
     login(request, user, backend='allauth.account.auth_backends.AuthenticationBackend')
-    logger.info(f'新規ユーザーが登録されました: {user.email}')
+    logger.info('新規ユーザーが登録されました', extra={'email': user.email})
     return JsonResponse({'user': _serialize_user(user)}, status=201)
 
 
 @csrf_exempt
 @require_POST
 def login_view(request: HttpRequest) -> JsonResponse:
+    ip = get_client_ip(request)
+    if is_rate_limited(ip, _login_attempts, _LOGIN_WINDOW_SECONDS, _LOGIN_MAX_ATTEMPTS):
+        return JsonResponse({'error': 'リクエストが多すぎます。しばらくしてから試してください。'}, status=429)
+
     try:
         body = json.loads(request.body)
     except (json.JSONDecodeError, ValueError):
@@ -128,7 +155,7 @@ def login_view(request: HttpRequest) -> JsonResponse:
         return JsonResponse({'error': 'このアカウントは無効です'}, status=403)
 
     login(request, user)
-    logger.info(f'ユーザーがログインしました: {user.email}')
+    logger.info('ユーザーがログインしました', extra={'email': user.email})
     return JsonResponse({'user': _serialize_user(user)})
 
 
@@ -215,7 +242,7 @@ def _update_me(request: HttpRequest) -> JsonResponse:
     try:
         user.save()
     except Exception as e:
-        logger.error(f'[update_me] ユーザー情報の更新に失敗しました: {e}', exc_info=True)
+        logger.error('[update_me] ユーザー情報の更新に失敗しました', exc_info=True)
         return JsonResponse({'error': '更新に失敗しました'}, status=500)
 
     # パスワード変更後は Django のセッション認証ハッシュが変わり自動ログアウトしてしまう。
@@ -223,7 +250,7 @@ def _update_me(request: HttpRequest) -> JsonResponse:
     if 'newPassword' in body:
         update_session_auth_hash(request, user)
 
-    logger.info(f'ユーザー情報が更新されました: {user.email}')
+    logger.info('ユーザー情報が更新されました', extra={'email': user.email})
     return JsonResponse({'user': _serialize_user(user)})
 
 
@@ -255,8 +282,8 @@ def _delete_me(request: HttpRequest) -> JsonResponse:
         logout(request)
         user.delete()
     except Exception as e:
-        logger.error(f'[delete_me] アカウント削除に失敗しました ({email}): {e}', exc_info=True)
+        logger.error('[delete_me] アカウント削除に失敗しました', extra={'email': email}, exc_info=True)
         return JsonResponse({'error': 'アカウントの削除に失敗しました'}, status=500)
 
-    logger.info(f'アカウントが削除されました: {email}')
+    logger.info('アカウントが削除されました', extra={'email': email})
     return JsonResponse({'ok': True})

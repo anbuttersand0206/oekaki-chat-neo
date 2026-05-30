@@ -36,6 +36,9 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:-oekaki_secret}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # ローカル開発は HTTP のため http を渡す。
+      # 本番 HTTPS 環境では .env で ACCOUNT_DEFAULT_HTTP_PROTOCOL=https を設定すること。
+      ACCOUNT_DEFAULT_HTTP_PROTOCOL: ${ACCOUNT_DEFAULT_HTTP_PROTOCOL:-http}
       EMAIL_BACKEND: ${EMAIL_BACKEND:-django.core.mail.backends.console.EmailBackend}
     depends_on:
       postgres:

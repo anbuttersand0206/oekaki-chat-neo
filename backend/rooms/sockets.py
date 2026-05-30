@@ -18,6 +18,9 @@ MAX_BUFFER = 20 * 1024 * 1024  # 20 MB（キャンバス状態の送受信に対
 ROOM_TTL_MINUTES = 30
 ROOM_MAX_LIFETIME_HOURS = 24
 CLEANUP_INTERVAL_SECONDS = 5 * 60
+# セッション再検証の間隔。on_connect 時のみ検証するとセッション失効後も
+# WebSocket が切れないため、定期的に再検証してその窓を閉じる。
+SESSION_REVALIDATION_INTERVAL_SECONDS = 5 * 60
 
 # ── バリデーション定数 ──────────────────────────────────────────────────────────
 _MAX_CANVAS_BYTES = 3 * 1024 * 1024
@@ -38,7 +41,8 @@ sio = socketio.AsyncServer(
 active_users: dict[str, dict[str, dict[str, str]]] = {}
 # join_attempts: ip → {count, reset_at}
 join_attempts: dict[str, dict[str, Any]] = {}
-_cleanup_task_started = False
+# _cleanup_loop と _session_revalidation_loop の両方を管理するフラグ
+_background_tasks_started = False
 
 
 async def _cleanup_loop() -> None:
@@ -56,9 +60,65 @@ async def _cleanup_loop() -> None:
             deleted_old, _ = await Room.objects.filter(created_at__lt=cutoff_age).adelete()
 
             if deleted_empty or deleted_old:
-                logger.info(f'[cleanup] 削除完了 (空室:{deleted_empty}, 老朽:{deleted_old})')
+                logger.info('[cleanup] 削除完了', extra={'deleted_empty': deleted_empty, 'deleted_old': deleted_old})
         except Exception as e:
-            logger.error(f'[cleanup] クリーンアップ中にエラーが発生しました: {e}', exc_info=True)
+            logger.error('[cleanup] クリーンアップ中にエラーが発生しました', exc_info=True)
+
+
+async def _session_revalidation_loop() -> None:
+    """接続中の全クライアントの Django セッションを定期的に再検証する。
+
+    on_connect 時のみ検証する設計だと、セッション失効・強制ログアウト後も
+    WebSocket 接続が生き続け、描画操作やチャットが継続できてしまう。
+    定期再検証でその窓を閉じる。
+    """
+    while True:
+        await asyncio.sleep(SESSION_REVALIDATION_INTERVAL_SECONDS)
+        # 反復中に on_disconnect が active_users を変更しても安全なよう
+        # スナップショットを先に取る
+        all_sids = [
+            sid
+            for room_sids in list(active_users.values())
+            for sid in list(room_sids.keys())
+        ]
+        for sid in all_sids:
+            await _revalidate_session(sid)
+
+
+async def _revalidate_session(sid: str) -> None:
+    """sid の Django セッションを検証し、無効なら WebSocket を切断する。
+
+    _session_revalidation_loop の下位問題として切り出し、
+    ループ本体の流れを追いやすくしている。
+    """
+    try:
+        session = await sio.get_session(sid)
+        if not session:
+            return
+
+        cookie_str = session.get('cookie_str', '')
+        # cookie_str がない場合は検証手段がないためスキップする。
+        # on_join_room のフォールバック認証パスで接続した場合に
+        # セッションに保存されないことがあるため。
+        if not cookie_str:
+            return
+
+        user = await _get_session_user(cookie_str)
+        if user is not None:
+            return
+
+        # セッション失効・ユーザー削除・アカウント無効化のいずれか
+        logger.info(
+            '[session_revalidation] セッション失効のため WebSocket を切断します',
+            extra={'sid': sid},
+        )
+        await sio.disconnect(sid)
+    except Exception:
+        logger.error(
+            '[session_revalidation] セッション検証中にエラーが発生しました',
+            extra={'sid': sid},
+            exc_info=True,
+        )
 
 
 async def _get_session_user(cookie_str: str):
@@ -86,7 +146,8 @@ async def _get_session_user(cookie_str: str):
         User = get_user_model()
         return await User.objects.aget(id=int(auth_user_id), is_active=True)
     except Exception as e:
-        logger.error(f'[get_session_user] Error: {e}')
+        # セッション取得失敗はよくある（期限切れ・改ざんなど）ため exc_info でトレースを残す
+        logger.error('[get_session_user] セッション取得中にエラーが発生しました', exc_info=True)
         return None
 
 
@@ -113,11 +174,14 @@ def _is_valid_data_url(value: Any) -> bool:
 # ── ハンドラ ────────────────────────────────────────────────────────────────────
 
 async def on_connect(sid: str, environ: dict, auth: Optional[Any] = None) -> None:
-    global _cleanup_task_started
-    # 接続時にクリーンアップループが動いていなければ起動する
-    if not _cleanup_task_started:
+    global _background_tasks_started
+    # 最初の接続時にバックグラウンドタスクをまとめて起動する。
+    # on_connect は複数クライアントから並行して呼ばれるが、asyncio はシングルスレッドで
+    # イベントループが await なしに中断されないため、このフラグ確認は競合しない。
+    if not _background_tasks_started:
         sio.start_background_task(_cleanup_loop)
-        _cleanup_task_started = True
+        sio.start_background_task(_session_revalidation_loop)
+        _background_tasks_started = True
 
     # python-engineio は ASGI scope の headers を HTTP_* 形式（WSGI-like）に変換して渡す。
     # そのため Cookie は environ['HTTP_COOKIE'] に格納されている。
@@ -136,7 +200,7 @@ async def on_connect(sid: str, environ: dict, auth: Optional[Any] = None) -> Non
             'username': user.username,
         })
     else:
-        logger.warning(f'[connect] 未認証の接続を許可しました（操作時に認証チェック）: sid={sid}')
+        logger.warning('[connect] 未認証の接続を許可しました（操作時に認証チェック）', extra={'sid': sid})
 
     await sio.save_session(sid, session_data)
     # 接続を拒否せず、Room 参加時に auth_user_id の有無で権限チェックを行う。
@@ -257,7 +321,7 @@ async def on_join_room(sid: str, data: Any) -> None:
         }, to=sid)
         await sio.emit('user_joined', {'id': user_id, 'name': username}, room=room_id, skip_sid=sid)
     except Exception as e:
-        logger.error(f'[on_join_room] 部屋 {room_id} への参加中にエラーが発生しました: {e}', exc_info=True)
+        logger.error('[on_join_room] 部屋への参加中にエラーが発生しました', extra={'room_id': room_id}, exc_info=True)
         await sio.emit('room_error', {'code': 'INTERNAL_ERROR', 'message': '内部エラーが発生しました'}, to=sid)
 
 
@@ -295,7 +359,7 @@ async def on_canvas_state(sid: str, data: dict) -> None:
     try:
         await Room.objects.filter(id=room_id).aupdate(canvas_state=image_data)
     except Exception as e:
-        logger.error(f'[canvas_state] 部屋 {room_id} の DB 更新に失敗しました: {e}', exc_info=True)
+        logger.error('[canvas_state] DB 更新に失敗しました', extra={'room_id': room_id}, exc_info=True)
 
 
 async def on_cursor_move(sid: str, data: dict) -> None:
@@ -331,7 +395,7 @@ async def on_chat_message(sid: str, data: Any) -> None:
             message=message,
         )
     except Exception as e:
-        logger.error(f'[chat_message] 部屋 {room_id} への DB 保存に失敗しました: {e}', exc_info=True)
+        logger.error('[chat_message] DB 保存に失敗しました', extra={'room_id': room_id}, exc_info=True)
         return
     await sio.emit('chat_message', {
         'userId': str(auth_user_id),
@@ -358,7 +422,7 @@ async def on_brush_settings(sid: str, data: Any) -> None:
             defaults={'settings': settings},
         )
     except Exception as e:
-        logger.error(f'[brush_settings] ユーザー {auth_user_id} の DB 保存に失敗しました: {e}', exc_info=True)
+        logger.error('[brush_settings] DB 保存に失敗しました', extra={'user_id': auth_user_id}, exc_info=True)
 
 
 async def on_disconnect(sid: str, reason: Optional[str] = None) -> None:
