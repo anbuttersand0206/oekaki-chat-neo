@@ -522,7 +522,8 @@ export class App {
       });
     });
 
-    this.engine.fitToScreen();
+    // 入室時は常に 100% で表示する（fitToScreen だと画面サイズ次第で極小になるため）
+    this.engine.setZoom(1);
     document.getElementById('sb-engine')!.textContent = 'JS Engine';
     this.setupZoomPicker();
     initBrushWasm().then(ok => {

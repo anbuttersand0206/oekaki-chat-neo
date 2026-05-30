@@ -9,7 +9,7 @@ export class RoomUI {
   onSignup?: (username: string, email: string, password: string) => Promise<void>;
   onGoToSignup?: () => void;
   onGoToLogin?: () => void;
-  onLogout?: () => void;
+  onLogout?: () => Promise<void>;
   // 画面遷移の権限は App が持つ。RoomUI はコールバックで委譲する（onGoToSignup と同じ方針）。
   onGoToSettings?: () => void;
   onGoToDeactivate?: () => void;
@@ -77,7 +77,7 @@ export class RoomUI {
 
     // ── ダッシュボード画面 ────────────────────────────────────────────────────
     document.getElementById('logout-btn')?.addEventListener('click', async () => {
-      this.onLogout?.();
+      await this.onLogout?.();
     });
 
     // ── ユーザーメニュードロップダウン ────────────────────────────────────────
