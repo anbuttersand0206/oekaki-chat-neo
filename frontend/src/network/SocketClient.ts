@@ -45,6 +45,13 @@ export class SocketClient {
 
     this.socket.on('connect',          () => console.log('Socket connected'));
     this.socket.on('disconnect', (reason) => console.warn('Socket disconnected:', reason));
+    this.socket.on('connect_error', (err) => {
+      console.error('Socket connection error:', err);
+      this.onRoomError?.({ code: 'CONNECT_ERROR', message: `サーバーへの接続に失敗しました: ${err.message}` });
+    });
+    this.socket.on('error', (err) => {
+      console.error('Socket error:', err);
+    });
     this.socket.on('reconnect_failed', () => this.onReconnectFailed?.());
   }
 

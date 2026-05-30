@@ -6,27 +6,12 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:3001',
-        changeOrigin: true,
-        configure: (proxy) => {
-          proxy.on('proxyReq', (proxyReq) => {
-            // ローカル開発では Cookie をバックエンドに転送しない
-            // （認証テストのため意図的に未認証で通す場合があるため）
-            proxyReq.removeHeader('cookie');
-          });
-        }
+        changeOrigin: true
       },
       '/socket.io': {
         target: 'http://localhost:3001',
         ws: true,
-        changeOrigin: true,
-        configure: (proxy) => {
-          proxy.on('proxyReq', (proxyReq) => {
-            proxyReq.removeHeader('cookie');
-          });
-          proxy.on('proxyReqWs', (proxyReq) => {
-            proxyReq.removeHeader('cookie');
-          });
-        }
+        changeOrigin: true
       }
     }
   },

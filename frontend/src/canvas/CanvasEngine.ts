@@ -32,11 +32,12 @@ export class CanvasEngine {
   onTransformUpdate?: (angle: number | null) => void;
 
   constructor(container: HTMLElement) {
-    this.mainCanvas = document.createElement('canvas');
-    this.overlayCanvas = document.createElement('canvas');
+    this.mainCanvas = document.getElementById('main-canvas') as HTMLCanvasElement;
+    this.overlayCanvas = document.getElementById('overlay-canvas') as HTMLCanvasElement;
 
-    this.mainCanvas.id = 'main-canvas';
-    this.overlayCanvas.id = 'overlay-canvas';
+    if (!this.mainCanvas || !this.overlayCanvas) {
+      throw new Error('Required canvas elements not found');
+    }
 
     [this.mainCanvas, this.overlayCanvas].forEach(c => {
       c.width = CANVAS_W;
@@ -45,7 +46,6 @@ export class CanvasEngine {
       c.style.top = '0';
       c.style.left = '0';
       c.style.transformOrigin = '0 0';
-      container.appendChild(c);
     });
 
     // メインキャンバスにのみ影を付ける（オーバーレイは透明なので不要）

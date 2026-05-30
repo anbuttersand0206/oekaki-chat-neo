@@ -236,25 +236,30 @@ export class App {
     };
 
     this.socket.onRoomJoined = ({ roomId, userId, users, canvasState, brushSettings, chatHistory }) => {
-      this.userId = userId;
-      this.roomId = roomId;
-      this.users = users.map((u, i) => ({ ...u, color: USER_COLORS[i % USER_COLORS.length] }));
+      try {
+        this.userId = userId;
+        this.roomId = roomId;
+        this.users = users.map((u, i) => ({ ...u, color: USER_COLORS[i % USER_COLORS.length] }));
 
-      this.showDrawScreen();
+        this.showDrawScreen();
 
-      if (brushSettings) this.brushPanel.restoreAllBrushConfigs(brushSettings);
-      if (canvasState)   this.engine.loadStateDataUrl(canvasState);
+        if (brushSettings) this.brushPanel.restoreAllBrushConfigs(brushSettings);
+        if (canvasState)   this.engine.loadStateDataUrl(canvasState);
 
-      this.roomUI.setRoomInfo(roomId, users.length, 5);
-      this.roomUI.updateUserList(this.users);
+        this.roomUI.setRoomInfo(roomId, users.length, 5);
+        this.roomUI.updateUserList(this.users);
 
-      if (chatHistory) {
-        for (const msg of chatHistory) {
-          this.roomUI.addChatMessage(msg.username, msg.message, msg.userId === userId);
+        if (chatHistory) {
+          for (const msg of chatHistory) {
+            this.roomUI.addChatMessage(msg.username, msg.message, msg.userId === userId);
+          }
         }
-      }
 
-      this.startCanvasSync();
+        this.startCanvasSync();
+      } catch (e: any) {
+        console.error('[onRoomJoined] Error:', e);
+        this.roomUI.showRoomError(`画面の切り替え中にエラーが発生しました: ${e.message}`);
+      }
     };
 
     this.socket.onRoomError = ({ message }) => {
@@ -299,6 +304,9 @@ export class App {
   }
 
   private showDrawScreen() {
+    if (this.engine) {
+      this.engine.destroy();
+    }
     this.roomUI.showScreen('draw');
 
     const wrapper = document.getElementById('canvas-wrapper')!;
