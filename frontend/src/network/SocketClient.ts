@@ -20,12 +20,15 @@ export class SocketClient {
   onReconnectFailed?: () => void;
 
   constructor() {
+    // autoConnect: false — ログイン確定後に connect() を明示的に呼ぶまで接続しない。
+    // 起動時に即接続すると未認証で拒否され、ログイン後も再接続されないままになるため。
     this.socket = io({
       path: '/socket.io',
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
-      reconnectionAttempts: 10
+      reconnectionAttempts: 10,
+      autoConnect: false,
     });
 
     const wrapEventHandler = (eventName: string, fn: () => void) => {
@@ -43,6 +46,13 @@ export class SocketClient {
     this.socket.on('connect',          () => console.log('Socket connected'));
     this.socket.on('disconnect', (reason) => console.warn('Socket disconnected:', reason));
     this.socket.on('reconnect_failed', () => this.onReconnectFailed?.());
+  }
+
+  connect(): void {
+    // 未接続の場合だけ接続する（既接続なら no-op）
+    if (!this.socket.connected) {
+      this.socket.connect();
+    }
   }
 
   joinRoom(roomId: string, password: string) {

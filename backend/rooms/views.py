@@ -68,7 +68,9 @@ async def room_create(request: HttpRequest) -> JsonResponse:
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
 
-    if not request.user.is_authenticated:
+    # request.user は SimpleLazyObject のため async ビュー内では auser() を使う
+    user = await request.auser()
+    if not user.is_authenticated:
         return JsonResponse({'error': 'ログインしてください'}, status=401)
 
     # リバースプロキシ経由の場合は X-Real-IP / X-Forwarded-For を優先する
@@ -127,13 +129,15 @@ async def room_create(request: HttpRequest) -> JsonResponse:
 @require_GET
 async def dashboard_rooms(request: HttpRequest) -> JsonResponse:
     """ログイン中ユーザーが過去に参加した部屋の一覧を返す。"""
-    if not request.user.is_authenticated:
+    # request.user は SimpleLazyObject のため async ビュー内では auser() を使う
+    user = await request.auser()
+    if not user.is_authenticated:
         return JsonResponse({'error': 'ログインしてください'}, status=401)
 
     rooms = []
     async for ur in (
         UserRoom.objects
-        .filter(user=request.user)
+        .filter(user=user)
         .select_related('room')
         .order_by('-joined_at')
     ):

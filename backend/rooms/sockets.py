@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 CORS_ORIGIN = os.environ.get('CORS_ORIGIN', 'http://localhost:8080')
 MAX_BUFFER = 20 * 1024 * 1024  # 20 MB（キャンバス状態の送受信に対応するため大きめに設定）
 ROOM_TTL_MINUTES = 30
+ROOM_MAX_LIFETIME_HOURS = 24
 CLEANUP_INTERVAL_SECONDS = 5 * 60
 
 # ── バリデーション定数 ──────────────────────────────────────────────────────────
@@ -37,7 +38,7 @@ sio = socketio.AsyncServer(
 active_users: dict[str, dict[str, dict[str, str]]] = {}
 # join_attempts: ip → {count, reset_at}
 join_attempts: dict[str, dict[str, Any]] = {}
-_cleanup_task: Optional[asyncio.Task] = None
+_cleanup_task_started = False
 
 
 async def _cleanup_loop() -> None:
@@ -45,10 +46,17 @@ async def _cleanup_loop() -> None:
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
         try:
-            cutoff = timezone.now() - timedelta(minutes=ROOM_TTL_MINUTES)
-            deleted, _ = await Room.objects.filter(last_emptied_at__lt=cutoff).adelete()
-            if deleted:
-                logger.info(f'[cleanup] {deleted} 件の古い部屋を削除しました')
+            now = timezone.now()
+            # 1. 空室になってから 30 分以上経過した部屋を削除
+            cutoff_empty = now - timedelta(minutes=ROOM_TTL_MINUTES)
+            deleted_empty, _ = await Room.objects.filter(last_emptied_at__lt=cutoff_empty).adelete()
+
+            # 2. 作成から 24 時間以上経過した部屋を削除（絶対的なライフサイクル管理）
+            cutoff_age = now - timedelta(hours=ROOM_MAX_LIFETIME_HOURS)
+            deleted_old, _ = await Room.objects.filter(created_at__lt=cutoff_age).adelete()
+
+            if deleted_empty or deleted_old:
+                logger.info(f'[cleanup] 削除完了 (空室:{deleted_empty}, 老朽:{deleted_old})')
         except Exception as e:
             logger.error(f'[cleanup] クリーンアップ中にエラーが発生しました: {e}', exc_info=True)
 
@@ -100,10 +108,11 @@ def _is_valid_data_url(value: Any) -> bool:
 # ── ハンドラ ────────────────────────────────────────────────────────────────────
 
 async def on_connect(sid: str, environ: dict, auth: Optional[Any] = None) -> None:
-    global _cleanup_task
-    # 最初の接続時にクリーンアップループを起動する（既に動いていれば再起動しない）
-    if _cleanup_task is None or _cleanup_task.done():
-        _cleanup_task = asyncio.create_task(_cleanup_loop())
+    global _cleanup_task_started
+    # 接続時にクリーンアップループが動いていなければ起動する
+    if not _cleanup_task_started:
+        sio.start_background_task(_cleanup_loop)
+        _cleanup_task_started = True
 
     headers = {k.decode().lower(): v.decode() for k, v in environ.get('headers', [])}
     # リバースプロキシ経由の場合は転送ヘッダーを優先する

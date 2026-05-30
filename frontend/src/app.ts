@@ -204,6 +204,9 @@ export class App {
       // パスワードの有無に応じて退会フォームのパスワード欄を出し分ける
       this.roomUI.setupDeactivateForm(this.currentUser.hasPassword);
     }
+    // ログイン確定後のこのタイミングで接続する。
+    // セッション Cookie がセット済みなので認証が通る。
+    this.socket.connect();
     this.roomUI.showScreen('dashboard');
     await this.fetchDashboardRooms();
   }

@@ -126,6 +126,7 @@ Socket disconnect（最後の1人が退出）
 | # | ファイル | 内容 |
 |---|---------|------|
 | 0001 | `accounts/migrations/0001_initial.py` | `accounts_user` 作成 |
+| 0002 | `accounts/migrations/0002_alter_user_email_alter_user_groups_and_more.py` | `AbstractUser` 継承フィールドの verbose_name・制約を Django 標準に合わせて同期（DB スキーマ変更なし） |
 
 ### rooms アプリ
 
@@ -136,3 +137,4 @@ Socket disconnect（最後の1人が退出）
 | 0003 | `rooms/migrations/0003_chatmessage.py` | `rooms_chatmessage` 作成 |
 | 0004 | `rooms/migrations/0004_brushsettings_global_per_user.py` | `brushsettings` の `room` FK 削除、`username` を UNIQUE キー化 |
 | 0005 | `rooms/migrations/0005_auth_integration.py` | `brushsettings.username` → `user_id` FK、`chatmessage.user_id` VARCHAR削除 → FK追加、`rooms_userroom` 作成 |
+| 0006 | `rooms/migrations/0006_alter_brushsettings_unique_together_and_more.py` | `brushsettings` の `unique_together` 状態を空に同期（0004 で `room` FK 削除済みのため DB 操作なし）、`userroom.id` の verbose_name 追加 |

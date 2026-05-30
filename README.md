@@ -26,7 +26,9 @@
 | **メールアドレス＋パスワードで新規会員登録** | ユーザー名・メールアドレス・パスワードで登録。登録直後に自動ログイン |
 | **メールアドレス＋パスワードでログイン** | 登録済みアカウントでログイン |
 | **Google アカウントでログイン / 新規会員登録** | Google SSO（django-allauth）でワンクリック登録＆ログイン |
-| **ダッシュボード** | ログイン後に過去参加した部屋の一覧を表示。カードをクリックすると部屋IDが自動入力される |
+| **ダッシュボード** | ログイン後に過去参加した部屋の一覧を表示。カードをクリックすると部屋IDが自動入力される。ヘッダーのユーザー名メニューから各設定画面へ遷移できる |
+| **アカウント設定** | ヘッダードロップダウンから専用画面へ遷移。ユーザー名・メールアドレス変更とパスワード変更が可能 |
+| **退会** | ヘッダードロップダウンから専用画面へ遷移。確認チェック＋パスワード入力（Google SSO 専用アカウントはパスワード不要）で即時削除 |
 
 > **注意**: Google SSO を利用するには `.env` に `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` の設定が必要です。設定方法は [Google SSO の設定](#google-sso-の設定) を参照してください。
 
@@ -98,7 +100,7 @@
 | **入室** | Socket `join_room` | パスワード照合 → 成功すればキャンバス状態を新規参加者に送信。参加履歴を DB に記録 |
 | **キャンバス同期** | クライアントが 30 秒ごとに送信 | サーバーは最新の状態を 1 枚だけ保持 |
 | **退出** | Socket 切断時 | 参加者リストから除外、他ユーザーへ通知 |
-| **削除** | 最後の 1 人が退出してから **30 分後** | バックグラウンドの定期クリーンアップ（5 分ごと）が DB をチェックし削除。チャット履歴も CASCADE で削除される |
+| **削除** | 最後の 1 人が退出してから **30 分後**、または作成から **24 時間後** | バックグラウンドの定期クリーンアップ（5 分ごと）が DB をチェックし削除。チャット履歴も CASCADE で削除される |
 | **再起動時** | サーバー再起動時 | 30 分以上空室だった部屋を起動時にクリーンアップ。それ以外は保持される |
 
 > **注意**: 部屋が削除されると描いた内容も失われます。大切な絵は「ファイル → PNG で保存」で手元に残してください。
@@ -642,27 +644,176 @@ WebSocket 接続確立時（`on_connect`）に Django セッション Cookie を
 
 ## TODO / 今後の予定
 
-### ⚠️ 本番運用前に対応が必要な項目
+### 🔴 本番公開前に必須
 
-#### メール認証（新規会員登録）
+#### 1. メール認証（新規会員登録）
 
-**現状**: `POST /api/auth/register` は入力検証と重複確認のみ行い、アカウントを即座に有効化する。  
-**問題**: 存在しないメールアドレスや他人のアドレスで登録できてしまう。  
-**対応方針**: 以下のいずれかを実装すること。
+**現状**: `POST /api/auth/register` は検証・重複確認のみで、アカウントを即座に有効化する。  
+**問題**: 存在しないアドレスや他人のアドレスで登録できる。  
+**対応方針**:
 
-- **方法 A — django-allauth の `EMAIL_VERIFICATION = 'mandatory'` を利用する**  
-  `settings.py` で `ACCOUNT_EMAIL_VERIFICATION = 'mandatory'` に変更し、allauth 標準の確認メール送信フローに乗せる。  
-  ただし現在の `register_view` は allauth の登録フローを使わず直接 `create_user` しているため、  
-  allauth の登録ビュー（`/accounts/signup/`）に統一するか、`register_view` 内で  
-  `allauth.account.utils.send_email_confirmation()` を呼び出す改修が必要。
+- **方法 A（推奨）** — `ACCOUNT_EMAIL_VERIFICATION = 'mandatory'` に変更し allauth 標準フローに統一する。現在の `register_view` は `create_user` を直接呼んでいるため、allauth の登録ビューに乗り換えるか `send_email_confirmation()` を呼び出す改修が必要。
+- **方法 B** — `register_view` でトークンを生成し確認メールを送信。`is_active=False` の仮登録 → リンク踏んで有効化するフローを独自実装。
 
-- **方法 B — 独自の確認メール送信を実装する**  
-  `register_view` 内でトークンを生成し確認メールを送信。  
-  `is_active=False` で仮登録 → メールのリンクで `is_active=True` に切り替えるフローを実装する。
+**関連ファイル**: `accounts/views.py`（TODO コメントあり）・`oekaki/settings.py`（`ACCOUNT_EMAIL_VERIFICATION`）
 
-**関連コード**:
-- `backend/accounts/views.py` — `register_view`（TODO コメントあり）
-- `backend/oekaki/settings.py` — `ACCOUNT_EMAIL_VERIFICATION = 'optional'`（要変更）
+---
+
+#### 2. ログイン・新規会員登録 API のレート制限
+
+**現状**: `POST /api/auth/login` と `POST /api/auth/register` の両方にレート制限がない。  
+部屋作成（`POST /api/rooms`）には `_is_create_rate_limited()` が実装されているが、認証系 API は未対応。  
+**問題**:
+- ログイン: ブルートフォース攻撃・クレデンシャルスタッフィングに無防備
+- 新規登録: 大量アカウント作成攻撃（スパム登録・リソース枯渇）が可能
+
+**対応方針**: `views.py` の `_is_create_rate_limited()` を汎用関数化し、両エンドポイントに適用する。  
+またはアカウントロック（N 回連続失敗で一時ロック）を実装する。
+
+---
+
+#### 3. パスワードリセット機能
+
+**現状**: パスワードを忘れたユーザーが自力でリセットする手段がない（管理者が `changepassword` コマンドを叩くしかない）。  
+**対応方針**: allauth 標準の `password_reset` フロー（`/accounts/password/reset/`）を有効化する、またはカスタム API（`POST /api/auth/password-reset`）を実装する。
+
+---
+
+#### 4. SESSION_COOKIE_SECURE（HTTPS 環境）
+
+**現状**: `SESSION_COOKIE_SECURE` 未設定（= `False`）のため HTTP 通信でも Cookie が送信される。  
+**対応**: HTTPS 環境にデプロイする際に `SESSION_COOKIE_SECURE = True` を設定する。  
+ローカル開発では後回し可。
+
+---
+
+### 🟠 セキュリティ改善（重要・運用開始後）
+
+#### 5. セキュリティヘッダの追加
+
+**現状**: nginx / Django いずれもセキュリティヘッダが未設定。  
+**対応**: nginx.conf または Django の `SecurityMiddleware` で以下を追加する。
+
+| ヘッダ | 目的 |
+|--------|------|
+| `Content-Security-Policy` | XSS / コードインジェクション対策 |
+| `X-Frame-Options: DENY` | クリックジャッキング対策 |
+| `X-Content-Type-Options: nosniff` | MIME スニッフィング対策 |
+| `Strict-Transport-Security` | HTTPS 強制（HSTS）※ HTTPS 設定後 |
+
+---
+
+#### 6. WebSocket 接続中のセッション再検証
+
+**現状**: `on_connect` 時のみセッションを検証する。接続後にセッションが失効・強制ログアウトされても WebSocket は切断されない。  
+**対応**: 定期的（例: 5分ごと）に `sio.get_session()` からセッションキーを再取得・再検証し、無効なら `sio.disconnect()` を呼ぶ。
+
+---
+
+#### 7. CSRF 保護の明示的な強化
+
+**現状**: 全 API ビューに `@csrf_exempt` が付いており、`SameSite=Lax` + 同一オリジンからの `credentials: 'include'` で実質的に保護されている。  
+**問題**: `SameSite=Lax` はトップレベルナビゲーション（GET リダイレクト等）では Cookie を送るため完全ではない。  
+**対応**: `SameSite=Strict` への変更を検討する（Google SSO の OAuth リダイレクト動作を要確認）。
+
+---
+
+#### 8. Username / Email Enumeration 対策
+
+**現状**: `register_view` が「このメールアドレスはすでに登録されています」「このユーザー名はすでに使われています」という個別のエラーを返す。  
+**問題**: 攻撃者がエラーレスポンスを使って既存のメールアドレス・ユーザー名を確認できる（ユーザー名列挙）。  
+**対応方針**:
+
+- 短期: エラーメッセージを「メールアドレスまたはユーザー名はすでに使われています」に統一し、どちらが重複しているかを明かさない
+- 中期: メール認証（TODO #1）実装後は、登録フォームでは常に「確認メールを送りました」と返し、存在確認を不可能にする
+
+**関連ファイル**: `accounts/views.py` の `register_view`
+
+---
+
+#### 9. Log Injection 対策
+
+**現状**: `email`, `room_id` などユーザー由来の文字列をそのままログに埋め込んでいる。  
+```python
+logger.info(f'新規ユーザーが登録されました: {user.email}')
+logger.info(f'New room created: {room_id}')
+```
+**問題**: 改行コード（`\n`・`\r`）を含む入力でログエントリを偽造できる（Log Injection）。  
+**現状のリスク軽減**: `room_id` は regex でチェック済みで改行不可。`email` は `strip().lower()` 処理済みだが改行除去はしていない。  
+**対応**: ログに渡す前に `value.replace('\n', '\\n').replace('\r', '\\r')` でサニタイズするか、構造化ログ（JSON Lines 形式）に移行してインジェクション自体を無効化する。
+
+---
+
+#### 10. `SOCIALACCOUNT_LOGIN_ON_GET` のリスク
+
+**現状**: `SOCIALACCOUNT_LOGIN_ON_GET = True` により、`/accounts/google/login/` への GET リクエストだけで OAuth フローが開始される。  
+**問題**: 細工された URL をクリックさせるだけで、意図しない Google アカウントとの連携が開始される（Login CSRF に近い挙動）。allauth の CSRF トークン検証が一定の保護をしているが、完全ではない。  
+**対応**: `SOCIALACCOUNT_LOGIN_ON_GET = False` に戻し、中間確認ページ（「このアカウントでログインしますか？」）を表示するフローに戻すことを検討する。  
+**関連ファイル**: `oekaki/settings.py`
+
+---
+
+### 🟡 機能・UX
+
+#### 8. 部屋の管理機能
+
+現在、部屋の作成者と参加者に区別がない。  
+- 部屋のパスワード変更
+- 部屋の手動削除（作成者限定）
+- 最大人数のカスタマイズ（現在は固定 5 人）
+
+#### 9. ブラシプリセットの複数保存
+
+現在、ブラシ種別ごとに設定は 1 つだけ保存される。  
+ユーザーが名前を付けて複数のプリセットを保存・切り替えられると便利。  
+`rooms_brushsettings.settings` の JSON 構造変更が必要。
+
+---
+
+### 🔵 技術的負債
+
+#### 11. レートリミッターの外部化
+
+**現状**: `_create_attempts`（部屋作成）・`join_attempts`（入室）ともにプロセス内インメモリ。  
+**問題**: 複数プロセス・複数インスタンスで動かすとリミッターが機能しない。  
+**対応**: Redis または PostgreSQL ベースの共有カウンターに移行する。
+
+#### 12. チャット履歴の扱い
+
+**現状**: 部屋削除時にチャット履歴も `CASCADE` で全削除される。  
+また 1 部屋に最大 50 件しか復元しない。  
+**対応候補**: 部屋削除後も履歴を一定期間保持する、ページネーションで全件取得できるようにする。
+
+#### 13. Profile モデルの追加
+
+`accounts/models.py` に TODO コメントあり。プロフィール画像など任意属性の置き場所として、User への OneToOneField でぶら下げる設計にする予定（`db_design_guide_v2.md §3.1` 参照）。
+
+---
+
+### ⚪ 将来的な拡張
+
+| 項目 | 概要 |
+|------|------|
+| キャンバスサイズのカスタマイズ | 現在 1600×1200 固定。部屋作成時に指定できるようにする |
+| レイヤー機能 | 複数レイヤーを持ちブレンドモード指定できると表現力が上がる |
+| タイムラプス再生 | ストローク履歴を蓄積し描画過程を再生する |
+| モバイル対応の改善 | タッチ操作の UX 改善（ピンチズームなど） |
+
+---
+
+### 🚀 デプロイ
+
+デプロイ先の候補は `documents/deploy_options.md` にまとめてある。  
+**最有力**: Fly.io（既存 Dockerfile ほぼそのままデプロイ可能・月 $0〜5 程度）。  
+デプロイ時に対応が必要な設定変更:
+
+- `SESSION_COOKIE_SECURE = True`
+- `DEBUG = false`（デフォルトは `false` だが `.env` に `DEBUG=true` が残っていないか必ず確認。`True` のままだと Django がスタックトレースと設定内容を HTTP レスポンスで返す）
+- `DJANGO_SECRET_KEY`・`POSTGRES_PASSWORD` 等を Secrets に移す
+- `ALLOWED_HOSTS` に本番ドメインを追加
+- `CORS_ORIGIN` に本番フロントエンド URL を設定
+- `ACCOUNT_EMAIL_VERIFICATION = 'mandatory'`（メール認証実装後）
+- nginx の HTTPS 設定 + HSTS ヘッダ
 
 ---
 
