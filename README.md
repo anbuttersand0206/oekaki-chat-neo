@@ -9,11 +9,39 @@
 
 ### ログイン画面
 
-![ログイン画面](documents/screenshots/room-select.png)
+メールアドレス＋パスワード、または Google アカウントでログインできます。
+
+![ログイン画面](documents/screenshots/login.png)
+
+### 新規会員登録画面
+
+ユーザー名・メールアドレス・パスワードを入力して登録します。登録直後に自動ログインされます。
+
+![新規会員登録画面](documents/screenshots/registration.png)
+
+### ダッシュボード
+
+ログイン後のトップ画面。過去に参加した部屋の一覧から素早く再入室でき、新しい部屋の作成・入室フォームも右側に表示されます。
+
+![ダッシュボード](documents/screenshots/dashboard.png)
 
 ### メイン描画画面
 
+左ツールバー・上部メニューバー・右カラー&ブラシパネルで構成されるペイントUIです。ブラシエンジン（Wasm）の種類・パラメータをリアルタイムで調整しながら描画できます。
+
 ![メイン描画画面](documents/screenshots/main.png)
+
+### アカウント設定画面
+
+ヘッダーのユーザーメニューから遷移。プロフィール（ユーザー名・メールアドレス）の変更とパスワード変更を行えます。
+
+![アカウント設定画面](documents/screenshots/account_config.png)
+
+### 退会画面
+
+アカウントの削除確認画面。パスワード入力と同意チェックボックスにより、誤操作を防ぎます。
+
+![退会画面](documents/screenshots/withdrawls.png)
 
 ---
 
