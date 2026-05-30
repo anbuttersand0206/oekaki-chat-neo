@@ -1,7 +1,7 @@
 import { StrokeSettings, PARAM_IDS } from '../types';
 import { BrushEngine } from './BrushEngine';
 
-// ── C++ enum mappings (must match brush_engine.h) ─────────────────────────────
+// C++ 側の enum と対応させる（brush_engine.h と順序を一致させること）
 const BRUSH_TYPE: Record<string, number> = {
   pen: 0, marker: 1, pencil: 2, crayon: 3, airbrush: 4,
   watercolor: 5, oil: 6, pastel: 7, blur: 8,
@@ -12,7 +12,7 @@ const PARAM_IDX: Record<string, number> = {
   mixing: 4, water: 5, spread: 6,
 };
 
-// ── Emscripten module interface ───────────────────────────────────────────────
+// ── Emscripten モジュールのインターフェース ────────────────────────────────────
 interface BrushWasmModule {
   HEAPU8:  Uint8Array;
   HEAPF32: Float32Array;
@@ -23,7 +23,9 @@ declare global {
   interface Window { BrushWasm?: () => Promise<BrushWasmModule>; }
 }
 
-// ── Singleton module loader ───────────────────────────────────────────────────
+// ── Wasm モジュールのシングルトン管理 ─────────────────────────────────────────
+// 複数の strokeTo が並行して呼ばれてもモジュールの二重ロードを防ぐため
+// Promise をキャッシュしている
 let _mod: BrushWasmModule | null = null;
 let _loading: Promise<boolean> | null = null;
 
@@ -34,14 +36,14 @@ export function initBrushWasm(): Promise<boolean> {
     try {
       const factory = window.BrushWasm;
       if (!factory) {
-        console.log('[BrushEngine] Wasm not found — using TypeScript fallback');
+        console.log('[BrushEngine] Wasm が見つかりません — TypeScript フォールバックを使用');
         return false;
       }
       _mod = await factory();
-      console.log('[BrushEngine] Wasm loaded successfully');
+      console.log('[BrushEngine] Wasm の読み込みに成功しました');
       return true;
     } catch (e) {
-      console.warn('[BrushEngine] Wasm load failed — using TypeScript fallback', e);
+      console.warn('[BrushEngine] Wasm の読み込みに失敗しました — TypeScript フォールバックを使用', e);
       return false;
     }
   })();
@@ -50,16 +52,16 @@ export function initBrushWasm(): Promise<boolean> {
 
 export function isBrushWasmReady(): boolean { return _mod !== null; }
 
-// Called when Wasm aborts — clears the module so the TS engine takes over permanently.
+// Wasm がアボートしたときにモジュールを無効化し、TS エンジンへ恒久フォールバックする
 export function invalidateWasmEngine(): void {
   if (_mod) {
-    console.warn('[BrushEngine] Wasm module aborted — permanently falling back to TypeScript engine');
+    console.warn('[BrushEngine] Wasm モジュールがアボートしました — TypeScript エンジンに恒久切り替えします');
     _mod = null;
     _loading = null;
   }
 }
 
-// ── Wasm-aware stroke replay (used by CanvasEngine for remote/undo) ───────────
+// ── Wasm 対応のストローク再生（CanvasEngine のリモート/アンドゥに使用） ────────
 export function replayStroke(
   ctx: CanvasRenderingContext2D,
   points: { x: number; y: number; p: number; sp?: number }[],
@@ -67,7 +69,6 @@ export function replayStroke(
 ) {
   if (!points.length) return;
   if (_mod) {
-    // console.log('[BrushEngine] replay: Wasm');
     const eng = new WasmBrushEngine(ctx);
     try {
       eng.beginStroke(points[0].x, points[0].y, points[0].p, points[0].sp ?? 0, s);
@@ -80,16 +81,17 @@ export function replayStroke(
       invalidateWasmEngine();
     }
   }
-  // console.log('[BrushEngine] replay: TypeScript');
   BrushEngine.replay(ctx, points, s);
 }
 
 // ── WasmBrushEngine ───────────────────────────────────────────────────────────
 /**
- * The WasmBrushEngine acts as a high-performance bridge to the C++ brush engine
- * compiled via Emscripten. It optimizes drawing by using direct memory access
- * to the Wasm heap and implementing "dirty-rectangle" flushing to minimize
- * data transfer between Wasm and the main thread's Canvas context.
+ * Emscripten でコンパイルされた C++ ブラシエンジンへのブリッジ。
+ *
+ * パフォーマンスの肝は「ダーティ矩形フラッシュ」にある。
+ * ストローク開始時に現在のキャンバスを Wasm ヒープへ一括コピーし、
+ * strokeTo のたびに変化した矩形領域だけを Canvas 2D へ書き戻すことで、
+ * フルキャンバスコピーによる帯域ボトルネックを避けている。
  */
 export class WasmBrushEngine {
   private readonly id: number;
@@ -139,10 +141,10 @@ export class WasmBrushEngine {
 
   private getAffectedRad(s: StrokeSettings): number {
     const cfg = s.brushConfig;
-    // Account for potential size multipliers (pressure/speed curves can go up to 2.0, random up to 2.0)
-    const maxMult = 2.5; 
+    // 筆圧/速度カーブとランダム量が最大で 2.0 倍になるので余裕を持たせる
+    const maxMult = 2.5;
     const rad = Math.max(1, cfg.size) * 0.5 * maxMult;
-    
+
     switch (cfg.type) {
       case 'airbrush': {
         const coreRad = rad * cfg.hardness;
@@ -153,8 +155,8 @@ export class WasmBrushEngine {
         return rad + 2;
       }
       case 'blur': {
-        const blurKR = Math.max(1, rad * 0.2 | 0);
-        return rad + blurKR + 2;
+        const blurKernelRadius = Math.max(1, rad * 0.2 | 0);
+        return rad + blurKernelRadius + 2;
       }
       default:
         return rad + 2;
@@ -186,7 +188,7 @@ export class WasmBrushEngine {
       this._setRandom(this.id, idx, mod.randomAmount);
     }
 
-    // Copy current canvas → Wasm buffer (once per stroke)
+    // ストローク開始時に現在のキャンバスを Wasm バッファへ一括コピーする
     this.ptr = this._getCanvasBuf(this.id, cw, ch);
     const imgData = this.ctx.getImageData(0, 0, cw, ch);
     _mod!.HEAPU8.set(imgData.data, this.ptr);
@@ -194,7 +196,7 @@ export class WasmBrushEngine {
     this._beginStroke(this.id, x, y, pressure, speed);
     this.prevX = x; this.prevY = y;
 
-    // First dab: flush only around the initial point
+    // 最初のダブ: 始点周辺だけフラッシュする
     const frad = this.getAffectedRad(s);
     this.flushRect(x - frad, y - frad, x + frad, y + frad);
   }
@@ -205,7 +207,7 @@ export class WasmBrushEngine {
 
     this._strokeTo(this.id, x, y, pressure, speed);
 
-    // Flush only the dirty band between previous and current position
+    // 前回位置と現在位置の間のダーティ帯域だけフラッシュする
     const x0 = Math.min(this.prevX, x) - frad;
     const y0 = Math.min(this.prevY, y) - frad;
     const x1 = Math.max(this.prevX, x) + frad;
@@ -215,7 +217,7 @@ export class WasmBrushEngine {
     this.prevX = x; this.prevY = y;
   }
 
-  // ── Helpers ─────────────────────────────────────────────────────────────────
+  // ── ヘルパー ─────────────────────────────────────────────────────────────────
 
   private pushCurve(paramIdx: number, modType: number, pts: { x: number; y: number }[]) {
     const n = pts.length;
@@ -232,8 +234,8 @@ export class WasmBrushEngine {
     this._freeBuf(pys);
   }
 
-  // Extract a sub-rectangle from the Wasm canvas buffer and paint it to the 2D context.
-  // This is the key performance fix: copies only the changed region instead of the full canvas.
+  // Wasm キャンバスバッファから指定矩形を切り出して 2D コンテキストに書き込む。
+  // フルキャンバスではなく変更領域だけを転送することで帯域コストを抑えている。
   private flushRect(rx0: number, ry0: number, rx1: number, ry1: number) {
     const cw = this.ctx.canvas.width, ch = this.ctx.canvas.height;
     const x0 = Math.max(0, Math.floor(rx0));
@@ -246,7 +248,7 @@ export class WasmBrushEngine {
     const dst = new Uint8ClampedArray(w * h * 4);
     const heap = _mod!.HEAPU8;
 
-    // Copy row by row (canvas rows are contiguous but the sub-rect is not)
+    // キャンバス行は連続しているが部分矩形は非連続なので行ごとにコピーする
     for (let row = 0; row < h; row++) {
       const srcOff = this.ptr + ((y0 + row) * cw + x0) * 4;
       dst.set(heap.subarray(srcOff, srcOff + w * 4), row * w * 4);

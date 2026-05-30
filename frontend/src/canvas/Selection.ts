@@ -8,7 +8,7 @@ interface TransformState {
   angle: number;
   floatCanvas: HTMLCanvasElement;
   origX: number; origY: number;
-  isPaste: boolean; // paste transform: cancel just discards (no restore)
+  isPaste: boolean; // 貼り付けトランスフォーム: キャンセル時は破棄のみ（復元不要）
 }
 
 interface DragState {
@@ -38,7 +38,7 @@ export class SelectionManager {
 
   setMode(mode: 'rect' | 'lasso') { this._mode = mode; }
 
-  // ── Rect selection ──────────────────────────────────────────────────────────
+  // ── 矩形選択 ──────────────────────────────────────────────────────────────────
 
   startRect(x: number, y: number) {
     if (this._transform) return;
@@ -63,7 +63,7 @@ export class SelectionManager {
     this.onSelectionChange?.();
   }
 
-  // ── Lasso selection ─────────────────────────────────────────────────────────
+  // ── 自由選択（ラッソ） ────────────────────────────────────────────────────────
 
   startLasso(x: number, y: number) {
     if (this._transform) return;
@@ -101,7 +101,7 @@ export class SelectionManager {
     this.onSelectionChange?.();
   }
 
-  // ── Transform mode ──────────────────────────────────────────────────────────
+  // ── トランスフォームモード ─────────────────────────────────────────────────────
 
   enterTransform(mainCtx: CanvasRenderingContext2D): boolean {
     if (this._transform) return true;
@@ -113,7 +113,7 @@ export class SelectionManager {
     fc.width = w; fc.height = h;
     const fctx = fc.getContext('2d')!;
 
-    // Capture selection (with lasso clipping if needed)
+    // 選択範囲をキャプチャする（ラッソの場合はクリップして切り出す）
     fctx.save();
     if (this._lassoPoints.length >= 3) {
       fctx.beginPath();
@@ -125,7 +125,7 @@ export class SelectionManager {
     fctx.drawImage(mainCtx.canvas, x, y, w, h, 0, 0, w, h);
     fctx.restore();
 
-    // Clear original area on main canvas
+    // メインキャンバスの選択領域を白で塗り潰す（切り取り）
     mainCtx.save();
     mainCtx.fillStyle = '#ffffff';
     if (this._lassoPoints.length >= 3) {
@@ -169,8 +169,7 @@ export class SelectionManager {
     if (!this._transform) return;
     const t = this._transform;
     if (!t.isPaste) {
-      // Restore the pixels that were cut from the canvas.
-      // Since enterTransform only cleared the selection area, we just draw the floatCanvas back.
+      // enterTransform で切り取った領域を floatCanvas で復元する
       mainCtx.drawImage(t.floatCanvas, t.origX, t.origY);
     }
     this._transform = null;
@@ -178,7 +177,7 @@ export class SelectionManager {
     this.onSelectionChange?.();
   }
 
-  // Enter transform mode from clipboard (paste flow)
+  // クリップボードから貼り付けてトランスフォームモードに入る
   pasteAsTransform(dataUrl: string, w: number, h: number, mainCtx: CanvasRenderingContext2D): boolean {
     const canvasCx = mainCtx.canvas.width / 2;
     const canvasCy = mainCtx.canvas.height / 2;
@@ -190,7 +189,6 @@ export class SelectionManager {
     const img = new Image();
     img.onload = () => {
       fctx.drawImage(img, 0, 0);
-      // If another transform is already active, just update it
       this._transform = {
         cx: canvasCx, cy: canvasCy,
         w, h, angle: 0,
@@ -207,7 +205,7 @@ export class SelectionManager {
     return true;
   }
 
-  // ── Handle interaction ──────────────────────────────────────────────────────
+  // ── ハンドル操作 ──────────────────────────────────────────────────────────────
 
   private getHandlePositions(t: TransformState, hr: number): Map<HandleId, { x: number; y: number }> {
     const { cx, cy, w, h, angle } = t;
@@ -278,12 +276,13 @@ export class SelectionManager {
     if (d.handle === 'rotate') {
       const mouseAngle = Math.atan2(my - d.startCy, mx - d.startCx);
       let newAngle = d.startAngle + (mouseAngle - d.rotStartMouseAngle);
+      // Shift 押下中は 15° 単位でスナップする
       if (shiftKey) newAngle = Math.round(newAngle / (Math.PI / 12)) * (Math.PI / 12);
       t.angle = newAngle;
       return;
     }
 
-    // Resize: work in local (unrotated) space relative to the start-of-drag center
+    // リサイズ: ドラッグ開始時の中心を基準にローカル（非回転）空間で計算する
     const sa = d.startAngle;
     const cos = Math.cos(sa), sin = Math.sin(sa);
     const unrot = (wx: number, wy: number) => ({ x: wx * cos + wy * sin, y: -wx * sin + wy * cos });
@@ -293,7 +292,7 @@ export class SelectionManager {
     const localMouse = unrot(dxW, dyW);
     const hw0 = d.startW / 2, hh0 = d.startH / 2;
 
-    // Pinned opposite point in local space, and which axes are free
+    // ピン留めする対辺の位置と、どの軸が自由かを定義する
     const cfg: Record<string, { px: number; py: number; xFree: boolean; yFree: boolean }> = {
       nw: { px:  hw0, py:  hh0, xFree: true,  yFree: true  },
       ne: { px: -hw0, py:  hh0, xFree: true,  yFree: true  },
@@ -331,7 +330,7 @@ export class SelectionManager {
     this._drag = null;
   }
 
-  // ── Copy / Cut / Paste ──────────────────────────────────────────────────────
+  // ── コピー / カット / ペースト ────────────────────────────────────────────────
 
   copy(mainCtx: CanvasRenderingContext2D): boolean {
     if (!this._rect) return false;
@@ -395,7 +394,7 @@ export class SelectionManager {
 
   getClipboard(): { dataUrl: string; w: number; h: number } | null { return this.clipboard; }
 
-  // ── Overlay drawing ─────────────────────────────────────────────────────────
+  // ── オーバーレイ描画 ──────────────────────────────────────────────────────────
 
   drawOverlay(ctx: CanvasRenderingContext2D, dashOffset: number, zoom = 1) {
     if (this._transform) {
@@ -403,23 +402,21 @@ export class SelectionManager {
       return;
     }
 
-    // Lasso: draw the freeform path (open during drawing, closed after commit)
+    // ラッソ: 描画中は開いたパス、確定後は閉じたパスで点線を描く
     if (this._lassoPoints.length >= 2) {
       const committed = this._rect !== null;
       ctx.save();
       ctx.lineWidth = 1.5 / zoom;
       const dash = 5 / zoom;
-      
+
       ctx.beginPath();
       ctx.moveTo(this._lassoPoints[0].x, this._lassoPoints[0].y);
       for (const p of this._lassoPoints.slice(1)) ctx.lineTo(p.x, p.y);
       if (committed) ctx.closePath();
 
-      // White solid line
       ctx.strokeStyle = 'white';
       ctx.stroke();
 
-      // Black dashed line
       ctx.setLineDash([dash, dash]);
       ctx.lineDashOffset = -dashOffset / zoom;
       ctx.strokeStyle = 'black';
@@ -430,7 +427,7 @@ export class SelectionManager {
       return;
     }
 
-    // Rect selection
+    // 矩形選択
     if (!this._rect) return;
     const { x, y, w, h } = this._rect;
     if (w < 1 || h < 1) return;
@@ -439,11 +436,9 @@ export class SelectionManager {
     ctx.lineWidth = 1.5 / zoom;
     const dash = 5 / zoom;
 
-    // White solid line
     ctx.strokeStyle = 'white';
     ctx.strokeRect(x, y, w, h);
 
-    // Black dashed line
     ctx.setLineDash([dash, dash]);
     ctx.lineDashOffset = -dashOffset / zoom;
     ctx.strokeStyle = 'black';
@@ -459,24 +454,22 @@ export class SelectionManager {
     const lw = Math.max(0.5, 1 / zoom);
     const dash = 5 / zoom;
 
-    // Floating image preview
+    // フローティング画像プレビュー
     ctx.save();
     ctx.translate(t.cx, t.cy);
     ctx.rotate(t.angle);
     ctx.drawImage(t.floatCanvas, -t.w / 2, -t.h / 2, t.w, t.h);
     ctx.restore();
 
-    // Dashed border (rotated)
+    // 点線ボーダー（回転あり）
     ctx.save();
     ctx.translate(t.cx, t.cy);
     ctx.rotate(t.angle);
     ctx.lineWidth = lw * 1.5;
 
-    // White solid line
     ctx.strokeStyle = 'white';
     ctx.strokeRect(-t.w / 2, -t.h / 2, t.w, t.h);
 
-    // Black dashed line
     ctx.setLineDash([dash, dash]);
     ctx.lineDashOffset = -dashOffset / zoom;
     ctx.strokeStyle = 'black';
@@ -485,12 +478,12 @@ export class SelectionManager {
     ctx.setLineDash([]);
     ctx.restore();
 
-    // Handles
+    // ハンドル
     const handles = this.getHandlePositions(t, hr);
     const nPos = handles.get('n')!;
     const rPos = handles.get('rotate')!;
 
-    // Line from top-center to rotate handle
+    // 上辺中央から回転ハンドルへの接続線
     ctx.save();
     ctx.strokeStyle = 'rgba(80,80,80,0.8)';
     ctx.lineWidth = lw;
@@ -506,7 +499,6 @@ export class SelectionManager {
       ctx.strokeStyle = '#444';
       ctx.lineWidth = lw;
       if (id === 'rotate') {
-        // Circle with arc arrow
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, hr, 0, Math.PI * 2);
         ctx.fill();
@@ -516,7 +508,6 @@ export class SelectionManager {
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, hr * 0.55, -Math.PI * 0.75, Math.PI * 0.5);
         ctx.stroke();
-        // Arrow head
         const arrowAngle = Math.PI * 0.5;
         const ax = pos.x + Math.cos(arrowAngle) * hr * 0.55;
         const ay = pos.y + Math.sin(arrowAngle) * hr * 0.55;

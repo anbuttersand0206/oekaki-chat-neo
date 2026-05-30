@@ -19,40 +19,38 @@ export class ToolManager {
   private ctx!: ToolContext;
   private wrapper!: HTMLElement;
 
-  // Brush state — Wasm engine preferred, TS fallback
+  // ブラシ描画状態 — Wasm エンジン優先、失敗時は TS フォールバック
   private brushEng: BrushEngine | WasmBrushEngine | null = null;
   private strokePoints: StrokePoint[] = [];
   private strokeTimer: number | null = null;
   private strokeStartTime = 0;
   private isDrawing = false;
-  // Input smoothing — weighted moving average over last N raw samples
+  // 入力平滑化 — 直近 N サンプルの加重移動平均（大きいほど滑らか、遅延も増える）
   private rawBuf: Array<{ x: number; y: number; p: number }> = [];
-  private static readonly SMOOTH_WIN = 5; // window size (higher = smoother, more lag)
-  // Direction tracking for nuki (stroke-end taper)
+  private static readonly SMOOTH_WIN = 5;
+  // 抜き（ストローク末端のテーパー）のために最終方向を追跡する
   private prevSmX = 0;
   private prevSmY = 0;
   private lastDirX = 0;
   private lastDirY = 0;
-  // Speed tracking
+  // 速度追跡
   private lastPtX = 0;
   private lastPtY = 0;
   private lastPtTime = 0;
   private currentSpeed = 0; // px/s
 
-  // Pan state
+  // パン状態
   private panStartX = 0;
   private panStartY = 0;
-  private panOrigX = 0;
-  private panOrigY = 0;
   private spaceDown = false;
 
-  // Select state
+  // 選択状態
   private selStartX = 0;
   private selStartY = 0;
   private lassoActive = false;
   private selTransformDragActive = false;
 
-  // Paste floating
+  // 貼り付けフローティング状態
   private pasteActive = false;
   private pasteX = 0;
   private pasteY = 0;
@@ -74,7 +72,7 @@ export class ToolManager {
 
   getTool(): ToolType { return this.currentTool; }
 
-  // Space bar pan override
+  // スペースバー押下中は一時的にパンツールに切り替える
   private get effectiveTool(): ToolType {
     return this.spaceDown ? 'pan' : this.currentTool;
   }
@@ -107,7 +105,7 @@ export class ToolManager {
   }
 
   private onDown = (e: PointerEvent) => {
-    if (e.button === 1) { // middle click = pan
+    if (e.button === 1) { // ミドルクリック = パン
       this.startPan(e);
       return;
     }
@@ -153,11 +151,10 @@ export class ToolManager {
     const pressure = this.getPressure(e);
     const tool = this.effectiveTool;
 
-    // Update status bar
     document.getElementById('sb-pos')!.textContent =
       `X: ${Math.round(cx)}  Y: ${Math.round(cy)}`;
 
-    // Update transform cursor when hovering (not drawing)
+    // 描画中でないときにトランスフォームハンドルのカーソルを更新する
     if (!this.isDrawing &&
         (tool === 'rectSelect' || tool === 'lasso') &&
         this.ctx.engine.selection.isTransforming) {
@@ -170,13 +167,13 @@ export class ToolManager {
       case 'brush':
       case 'eraser':
         if (this.brushEng) {
-          // getCoalescedEvents gives all intermediate samples between pointermove fires
+          // getCoalescedEvents で pointermove イベント間のすべての中間サンプルを取得する
           const events: PointerEvent[] = e.getCoalescedEvents?.() ?? [e];
           const WIN = ToolManager.SMOOTH_WIN;
           for (const ce of events) {
             const [ecx, ecy] = this.ctx.engine.screenToCanvas(ce.clientX, ce.clientY);
             const ep = this.getPressure(ce);
-            // Weighted moving average: weights [1,2,...,WIN], newest = highest weight
+            // 加重移動平均: 重み [1,2,...,WIN]、最新が最高重み
             this.rawBuf.push({ x: ecx, y: ecy, p: ep });
             if (this.rawBuf.length > WIN) this.rawBuf.shift();
             let wx = 0, wy = 0, wp = 0, wsum = 0;
@@ -188,7 +185,7 @@ export class ToolManager {
               wsum += w;
             }
             const sx = wx / wsum, sy = wy / wsum, sp = wp / wsum;
-            // Update last stroke direction from smoothed positions
+            // 平滑化後の位置からストローク方向を更新する
             const ddx = sx - this.prevSmX, ddy = sy - this.prevSmY;
             const dd = Math.hypot(ddx, ddy);
             if (dd > 0.3) {
@@ -261,16 +258,16 @@ export class ToolManager {
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
     if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-      // Horizontal scroll (trackpad two-finger left/right) → pan
+      // 水平スクロール（トラックパッドの2本指左右）→ パン
       this.ctx.engine.panBy(-e.deltaX, 0);
     } else {
-      // Vertical scroll → zoom centered on cursor
+      // 垂直スクロール → カーソル中心ズーム
       const factor = e.deltaY < 0 ? 1.1 : 0.9;
       this.ctx.engine.zoomBy(factor, e.clientX, e.clientY);
     }
   };
 
-  // ── Brush ──────────────────────────────────────────────────────────────────
+  // ── ブラシ ────────────────────────────────────────────────────────────────────
 
   private calcSpeed(cx: number, cy: number): number {
     const now = performance.now();
@@ -295,7 +292,7 @@ export class ToolManager {
     this.strokeStartTime = performance.now();
     this.isDrawing = true;
 
-    // Alt+click = eyedropper
+    // Alt+クリック → スポイトとして機能させる
     if (e.altKey) {
       this.pickColor(cx, cy);
       this.brushEng = null;
@@ -304,21 +301,19 @@ export class ToolManager {
     }
 
     if (isBrushWasmReady()) {
-      // console.log('[BrushEngine] stroke: Wasm');
       const wasmEng = new WasmBrushEngine(this.ctx.engine.mainCtx);
       try {
         wasmEng.beginStroke(cx, cy, pressure, 0, s);
         this.brushEng = wasmEng;
       } catch (err) {
+        // Wasm が失敗したら破棄して TS エンジンにフォールバックする
         wasmEng.dispose();
         invalidateWasmEngine();
         const sbEng = document.getElementById('sb-engine'); if (sbEng) sbEng.textContent = 'JS Engine';
-        // console.log('[BrushEngine] stroke: TypeScript');
         this.brushEng = new BrushEngine(this.ctx.engine.mainCtx);
         this.brushEng.beginStroke(cx, cy, pressure, 0, s);
       }
     } else {
-      // console.log('[BrushEngine] stroke: TypeScript');
       this.brushEng = new BrushEngine(this.ctx.engine.mainCtx);
       this.brushEng.beginStroke(cx, cy, pressure, 0, s);
     }
@@ -363,8 +358,8 @@ export class ToolManager {
     }
     this.strokePoints.push({ x: cx, y: cy, p: pressure, sp: speed });
 
-    // Nuki: extend stroke along last direction with pressure tapering to 0.
-    // Length is proportional to final pressure × brush size so natural taper is preserved.
+    // 抜き: ストローク終端を最終方向に延長しながら筆圧を 0 に向けてテーパーさせる。
+    // 長さは「最終筆圧 × ブラシサイズ」に比例させることで自然な抜けを再現する。
     const hasDir = Math.hypot(this.lastDirX, this.lastDirY) > 0.5;
     if (hasDir && pressure > 0.02) {
       const nukiLen = pressure * s.brushConfig.size * 1.2;
@@ -373,7 +368,7 @@ export class ToolManager {
         const t = i / STEPS;
         const nx = cx + this.lastDirX * nukiLen * t;
         const ny = cy + this.lastDirY * nukiLen * t;
-        const np = pressure * (1 - t) * (1 - t); // quadratic fade to 0
+        const np = pressure * (1 - t) * (1 - t); // 二次関数で 0 に収束
         this.brushEng.strokeTo(nx, ny, np, speed * (1 - t), s);
         this.strokePoints.push({ x: nx, y: ny, p: np, sp: speed * (1 - t) });
       }
@@ -398,7 +393,7 @@ export class ToolManager {
     }, 80);
   }
 
-  // ── Fill ───────────────────────────────────────────────────────────────────
+  // ── 塗りつぶし ────────────────────────────────────────────────────────────────
 
   private doFill(cx: number, cy: number) {
     const s = this.ctx.getSettings();
@@ -406,7 +401,7 @@ export class ToolManager {
     this.ctx.emitFill(cx, cy);
   }
 
-  // ── Pan ────────────────────────────────────────────────────────────────────
+  // ── パン ──────────────────────────────────────────────────────────────────────
 
   private startPan(e: PointerEvent) {
     this.isDrawing = true;
@@ -423,7 +418,7 @@ export class ToolManager {
     this.ctx.engine.panBy(dx, dy);
   }
 
-  // ── Select ─────────────────────────────────────────────────────────────────
+  // ── 選択 ──────────────────────────────────────────────────────────────────────
 
   private startRectSelect(cx: number, cy: number) {
     this.selStartX = cx;
@@ -440,7 +435,7 @@ export class ToolManager {
     this.isDrawing = true;
   }
 
-  // ── Transform interaction ──────────────────────────────────────────────────
+  // ── トランスフォーム操作 ───────────────────────────────────────────────────────
 
   private startTransformInteraction(cx: number, cy: number) {
     const sel = this.ctx.engine.selection;
@@ -455,7 +450,7 @@ export class ToolManager {
       this.selTransformDragActive = true;
       this.isDrawing = true;
     } else {
-      // Click outside → commit and start new selection
+      // 枠外クリック → コミットして新しい選択を開始する
       this.ctx.engine.saveUndo();
       sel.commitTransform(this.ctx.engine.mainCtx);
       this.startRectSelect(cx, cy);
@@ -482,14 +477,14 @@ export class ToolManager {
     }
   }
 
-  // ── Eyedropper ─────────────────────────────────────────────────────────────
+  // ── スポイト ──────────────────────────────────────────────────────────────────
 
   private pickColor(cx: number, cy: number) {
     const [r, g, b] = this.ctx.engine.pickColor(cx, cy);
     this.ctx.engine.onColorPick?.(r, g, b);
   }
 
-  // ── Paste floating ─────────────────────────────────────────────────────────
+  // ── 貼り付けフローティング ────────────────────────────────────────────────────
 
   startPaste(dataUrl: string, w: number, h: number) {
     const cw = document.getElementById('main-canvas')!.getBoundingClientRect();
@@ -514,7 +509,7 @@ export class ToolManager {
   private getPressure(e: PointerEvent): number {
     if (e.pointerType === 'pen') return e.pressure;
     if (e.pointerType === 'touch') return e.pressure || 0.7;
-    return 1.0; // mouse
+    return 1.0; // マウスは常に最大圧
   }
 
   private updateCursor() {

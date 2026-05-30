@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>アカウント作成</h2>
+<p>{{ account.user.email }} でアカウントを作成します。</p>
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit"
+    style="background:#5b8fff;color:#fff;border:none;border-radius:6px;padding:10px 20px;cursor:pointer;font-size:14px;margin-top:12px;width:100%">
+    作成する
+  </button>
+</form>
+<p style="margin-top:16px"><a href="/">キャンセル</a></p>
+{% endblock %}

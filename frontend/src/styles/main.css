@@ -47,7 +47,9 @@
     0 0 / 20px 20px;
 }
 
-[data-theme="light"] #room-screen {
+[data-theme="light"] #room-screen,
+[data-theme="light"] #login-screen,
+[data-theme="light"] #dashboard-screen {
   background: radial-gradient(ellipse at 30% 40%, #d4ddf8 0%, #eaeaf8 60%);
 }
 
@@ -119,7 +121,470 @@ html, body {
 .screen { display: none; width: 100%; height: 100%; }
 .screen.active { display: flex; flex-direction: column; }
 
-/* ── Room Screen ── */
+/* ── ローディング画面 ────────────────────────────────────────────────────────
+   JS 実行前から表示しておくことで、セッション確認中のチラつきを防ぐ。
+   showScreen() が呼ばれると .hidden クラスが付いて非表示になる。 */
+.loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--bg);
+}
+.loading-screen.hidden { display: none; }
+
+.loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: loading-spin 0.7s linear infinite;
+}
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Login Screen ── */
+#login-screen {
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 30% 40%, #1a1a3a 0%, #0f0f18 60%);
+  position: relative;
+}
+
+#theme-toggle-login,
+#theme-toggle-signup {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+}
+
+[data-theme="light"] #login-screen {
+  background: radial-gradient(ellipse at 30% 40%, #d4ddf8 0%, #eaeaf8 60%);
+}
+
+/* ── Signup Screen ── */
+#signup-screen {
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 30% 40%, #1a1a3a 0%, #0f0f18 60%);
+  position: relative;
+}
+
+[data-theme="light"] #signup-screen {
+  background: radial-gradient(ellipse at 30% 40%, #d4ddf8 0%, #eaeaf8 60%);
+}
+
+/* ── 画面切り替えリンク ── */
+.auth-switch {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color .15s;
+}
+.link-btn:hover { color: var(--accent2); }
+
+/* Google SSO button */
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px;
+  color: var(--text2);
+  font-size: 11px;
+}
+.auth-divider::before, .auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.google-btn {
+  width: 100%;
+  padding: 9px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  transition: background .15s, border-color .15s;
+}
+.google-btn:hover { background: var(--bg-hover); border-color: var(--accent); }
+
+/* ── Dashboard Screen ── */
+#dashboard-screen {
+  background: radial-gradient(ellipse at 30% 40%, #1a1a3a 0%, #0f0f18 60%);
+  position: relative;
+  overflow-y: auto;
+}
+
+[data-theme="light"] #dashboard-screen {
+  background: radial-gradient(ellipse at 30% 40%, #d4ddf8 0%, #eaeaf8 60%);
+}
+
+.dashboard-layout {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 0 24px 40px;
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0 20px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+
+.dashboard-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dashboard-username-label {
+  font-size: 12px;
+  color: var(--text2);
+}
+
+/* ── ユーザーメニュードロップダウン ── */
+.user-menu {
+  position: relative;
+}
+
+.user-menu-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s;
+}
+.user-menu-trigger:hover { background: var(--bg-hover); }
+
+/* 展開時にシェブロンを反転させ、開閉状態を視覚的に示す */
+.user-menu-chevron { transition: transform .2s ease; flex-shrink: 0; }
+.user-menu-trigger[aria-expanded="true"] .user-menu-chevron { transform: rotate(180deg); }
+
+.user-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 160px;
+  padding: 4px 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  z-index: 200;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+
+.user-dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 8px 16px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .12s;
+}
+.user-dropdown-item:hover { background: var(--bg-hover); }
+
+/* 退会は危険操作なので赤で強調する */
+.user-dropdown-item--danger { color: var(--red); }
+.user-dropdown-item--danger:hover { background: rgba(255, 80, 80, .1); }
+
+.user-dropdown-sep {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2px 0;
+}
+
+.outline-btn {
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  color: var(--text2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.outline-btn:hover { background: var(--bg-hover); color: var(--text); }
+
+.dashboard-body {
+  display: flex;
+  gap: 32px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.dashboard-section {
+  flex: 1;
+  min-width: 240px;
+}
+
+.dashboard-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text2);
+  margin-bottom: 12px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.dashboard-form-card {
+  width: 340px;
+  flex-shrink: 0;
+}
+
+.room-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.room-card:hover { background: var(--bg-hover); border-color: var(--accent); }
+
+.room-card-id {
+  font-size: 13px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.room-card-count {
+  font-size: 11px;
+  color: var(--text2);
+}
+
+.room-list-empty {
+  font-size: 12px;
+  color: var(--text2);
+  padding: 12px 0;
+}
+
+.room-list-error {
+  font-size: 12px;
+  color: var(--red);
+  padding: 12px 0;
+}
+
+/* ── アカウント設定 ── */
+.dashboard-settings {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-cards {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  justify-content: center;
+}
+
+.settings-card {
+  width: 340px;
+  flex-shrink: 0;
+}
+
+.settings-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 20px;
+}
+
+.settings-msg {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+.settings-msg.is-success {
+  background: rgba(107, 203, 119, .12);
+  border: 1px solid rgba(107, 203, 119, .3);
+  color: #6bcb77;
+}
+
+.settings-msg.is-error {
+  background: rgba(255, 80, 80, .12);
+  border: 1px solid rgba(255, 80, 80, .3);
+  color: #ff8080;
+}
+
+/* ── 退会ゾーン ── */
+.danger-zone {
+  border-top: 1px solid rgba(255, 80, 80, .25);
+}
+
+.danger-zone-title {
+  color: var(--red);
+}
+
+.danger-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 460px;
+  width: 100%;
+  padding: 20px 24px;
+  background: rgba(255, 80, 80, .05);
+  border: 1px solid rgba(255, 80, 80, .25);
+  border-radius: 10px;
+  margin: 12px auto 0;
+  box-sizing: border-box;
+}
+
+.danger-description {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.6;
+}
+
+.danger-description strong {
+  color: var(--red);
+}
+
+.deactivate-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.deactivate-checkbox-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  accent-color: var(--red);
+}
+
+.danger-btn {
+  width: 100%;
+  padding: 10px;
+  background: transparent;
+  border: 1px solid var(--red);
+  border-radius: 6px;
+  color: var(--red);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.danger-btn:hover:not(:disabled) {
+  background: var(--red);
+  color: #fff;
+}
+.danger-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+/* ── サブ画面（アカウント設定・退会）── */
+#settings-screen,
+#deactivate-screen {
+  background: radial-gradient(ellipse at 30% 40%, #1a1a3a 0%, #0f0f18 60%);
+  position: relative;
+  overflow-y: auto;
+}
+
+[data-theme="light"] #settings-screen,
+[data-theme="light"] #deactivate-screen {
+  background: radial-gradient(ellipse at 30% 40%, #d4ddf8 0%, #eaeaf8 60%);
+}
+
+.subscreen-layout {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 0 32px 40px;
+}
+
+.subscreen-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 32px 20px;
+  border-bottom: 1px solid var(--border);
+  margin: 0 -32px 24px;
+}
+
+.subscreen-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* 退会画面のタイトルは danger-zone-title と組み合わせて赤くする */
+.subscreen-title.danger-zone-title { color: var(--red); }
+
+.back-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  color: var(--text2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.back-btn:hover { background: var(--bg-hover); color: var(--text); }
+
+/* ── (Legacy) Room Screen — kept for backward-compat selectors ── */
 #room-screen {
   align-items: center;
   justify-content: center;
@@ -144,6 +609,25 @@ html, body {
   width: 380px;
   backdrop-filter: blur(12px);
   box-shadow: 0 24px 64px rgba(0,0,0,.6);
+}
+
+/* ログイン・会員登録フォームのフィールド間隔。
+   ダッシュボードのタブ内フォームには影響しないよう > で直接子要素に限定する。 */
+.room-dialog > .field-group + .field-group {
+  margin-top: 16px;
+}
+
+/* フィールド群とボタンの間に意図的な余白を置き、
+   「入力エリア」と「実行ボタン」を視覚的に分離する */
+.room-dialog > .primary-btn {
+  margin-top: 24px;
+}
+
+/* 会員登録は 4 フィールドあるため、小さな画面でカードが
+   ビューポートを超えないようにスクロールを許可する */
+#signup-screen .room-dialog {
+  max-height: 90vh;
+  overflow-y: auto;
 }
 
 .room-logo {
@@ -207,6 +691,40 @@ html, body {
   transition: border-color .15s;
 }
 .field-group input:focus { border-color: var(--accent); }
+
+/* ── パスワード表示トグル ── */
+.password-field {
+  position: relative;
+}
+
+/* ボタン分の領域を右 padding で確保し、入力テキストが重ならないようにする */
+.password-field input {
+  padding-right: 38px;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 2px;
+  cursor: pointer;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  line-height: 0;
+  border-radius: 3px;
+  transition: color .15s;
+}
+.password-toggle-btn:hover { color: var(--text); }
+
+/* 初期状態（パスワード非表示）: 目アイコンを表示、目線消しアイコンを非表示 */
+.password-toggle-btn .icon-eye-off { display: none; }
+/* is-visible 付与時（パスワード表示中）: 目アイコンを非表示、目線消しアイコンを表示 */
+.password-toggle-btn.is-visible .icon-eye     { display: none; }
+.password-toggle-btn.is-visible .icon-eye-off { display: block; }
 
 .primary-btn {
   width: 100%;

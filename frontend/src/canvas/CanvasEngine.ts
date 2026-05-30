@@ -5,9 +5,10 @@ import { SelectionManager } from './Selection';
 import { DrawOp, StrokeSettings, defaultBrushConfig, CANVAS_W, CANVAS_H } from '../types';
 
 /**
- * The CanvasEngine handles all drawing operations, viewport transformations (zoom/pan),
- * and the history stack (undo/redo). It manages two canvas layers: a main layer for
- * permanent drawing and an overlay layer for transient UI elements like selection marquees.
+ * 描画操作・ビューポート変換（ズーム/パン）・履歴スタック（アンドゥ/リドゥ）を管理する。
+ *
+ * キャンバスは2層構成: メインレイヤー（永続描画）と
+ * オーバーレイレイヤー（選択マーキーなど一時的な UI 要素）。
  */
 export class CanvasEngine {
   readonly mainCanvas: HTMLCanvasElement;
@@ -31,11 +32,12 @@ export class CanvasEngine {
   onTransformUpdate?: (angle: number | null) => void;
 
   constructor(container: HTMLElement) {
-    this.mainCanvas = document.createElement('canvas');
-    this.overlayCanvas = document.createElement('canvas');
+    this.mainCanvas = document.getElementById('main-canvas') as HTMLCanvasElement;
+    this.overlayCanvas = document.getElementById('overlay-canvas') as HTMLCanvasElement;
 
-    this.mainCanvas.id = 'main-canvas';
-    this.overlayCanvas.id = 'overlay-canvas';
+    if (!this.mainCanvas || !this.overlayCanvas) {
+      throw new Error('Required canvas elements not found');
+    }
 
     [this.mainCanvas, this.overlayCanvas].forEach(c => {
       c.width = CANVAS_W;
@@ -44,16 +46,14 @@ export class CanvasEngine {
       c.style.top = '0';
       c.style.left = '0';
       c.style.transformOrigin = '0 0';
-      container.appendChild(c);
     });
 
-    // Add shadow only to the main canvas
+    // メインキャンバスにのみ影を付ける（オーバーレイは透明なので不要）
     this.mainCanvas.style.boxShadow = '0 4px 32px rgba(0,0,0,0.5)';
 
     this.mainCtx = this.mainCanvas.getContext('2d', { willReadFrequently: true })!;
     this.overlayCtx = this.overlayCanvas.getContext('2d')!;
 
-    // Initial fill
     this.mainCtx.fillStyle = '#fff';
     this.mainCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
@@ -68,7 +68,7 @@ export class CanvasEngine {
   setZoom(z: number, centerX?: number, centerY?: number) {
     const oldZ = this._zoom;
     this._zoom = Math.max(0.05, Math.min(20, z));
-    
+
     if (centerX !== undefined && centerY !== undefined) {
       const ratio = this._zoom / oldZ;
       this._panX = centerX - (centerX - this._panX) * ratio;
@@ -119,40 +119,29 @@ export class CanvasEngine {
     ];
   }
 
-  /**
-   * Captures the current canvas state and pushes it onto the undo stack.
-   * Clears the redo stack as any new action invalidates future redo states.
-   */
+  // 現在のキャンバス状態をアンドゥスタックに積む。
+  // 新しい操作が行われるとリドゥスタックは無効になるため同時にクリアする。
   saveUndo() {
     this.undoStack.push(this.mainCtx.getImageData(0, 0, CANVAS_W, CANVAS_H));
     if (this.undoStack.length > this.MAX_UNDO) this.undoStack.shift();
     this.redoStack = [];
   }
 
-  /**
-   * Reverts the canvas to the previous state from the undo stack.
-   */
   undo() {
     if (!this.undoStack.length) return;
     this.redoStack.push(this.mainCtx.getImageData(0, 0, CANVAS_W, CANVAS_H));
     this.mainCtx.putImageData(this.undoStack.pop()!, 0, 0);
   }
 
-  /**
-   * Re-applies the last undone state from the redo stack.
-   */
   redo() {
     if (!this.redoStack.length) return;
     this.undoStack.push(this.mainCtx.getImageData(0, 0, CANVAS_W, CANVAS_H));
     this.mainCtx.putImageData(this.redoStack.pop()!, 0, 0);
   }
 
-  // ── Drawing operations ────────────────────────────────────────────────────
+  // ── 描画操作 ──────────────────────────────────────────────────────────────────
 
-  /**
-   * Applies a drawing operation received from either the local tool or the network.
-   * This handles strokes, fills, clearing, and pasting images.
-   */
+  // ローカルツールとネットワーク受信の両方から呼ばれる共通描画エントリポイント。
   applyOp(op: DrawOp) {
     switch (op.type) {
       case 'stroke': {

@@ -1,14 +1,14 @@
 import { BrushConfig, BrushType, BRUSH_TYPES, CurvePoint, PARAM_IDS, defaultBrushConfig } from '../types';
 
-// ── Number precision helper ────────────────────────────────────────────────────
-
-function r3(n: number) { return Math.round(n * 1000) / 1000; }
+// ── 数値精度ヘルパー ────────────────────────────────────────────────────────────
+// 保存データを小さく保つため小数点以下3桁に丸める
+function roundTo3(n: number) { return Math.round(n * 1000) / 1000; }
 
 function compactPts(pts: CurvePoint[]) {
   return pts.map(p => {
-    const o: Record<string, number> = { x: r3(p.x), y: r3(p.y) };
-    if (p.lx != null) { o.lx = r3(p.lx); o.ly = r3(p.ly!); }
-    if (p.rx != null) { o.rx = r3(p.rx); o.ry = r3(p.ry!); }
+    const o: Record<string, number> = { x: roundTo3(p.x), y: roundTo3(p.y) };
+    if (p.lx != null) { o.lx = roundTo3(p.lx); o.ly = roundTo3(p.ly!); }
+    if (p.rx != null) { o.rx = roundTo3(p.rx); o.ry = roundTo3(p.ry!); }
     return o;
   });
 }
@@ -16,20 +16,20 @@ function compactPts(pts: CurvePoint[]) {
 function compactConfig(cfg: BrushConfig) {
   return {
     size:     cfg.size,
-    opacity:  r3(cfg.opacity),
-    density:  r3(cfg.density),
-    spacing:  r3(cfg.spacing),
-    hardness: r3(cfg.hardness),
-    mixing:   r3(cfg.mixing),
-    water:    r3(cfg.water),
-    spread:   r3(cfg.spread),
+    opacity:  roundTo3(cfg.opacity),
+    density:  roundTo3(cfg.density),
+    spacing:  roundTo3(cfg.spacing),
+    hardness: roundTo3(cfg.hardness),
+    mixing:   roundTo3(cfg.mixing),
+    water:    roundTo3(cfg.water),
+    spread:   roundTo3(cfg.spread),
     modifiers: Object.fromEntries(
       PARAM_IDS.map(pid => {
         const m = cfg.modifiers[pid];
         return [pid, {
           pressureCurve: compactPts(m.pressureCurve),
           speedCurve:    compactPts(m.speedCurve),
-          randomAmount:  r3(m.randomAmount),
+          randomAmount:  roundTo3(m.randomAmount),
         }];
       })
     ),
@@ -59,7 +59,7 @@ function expandConfig(type: BrushType, s: Record<string, unknown>): BrushConfig 
   };
 }
 
-// ── Public serialization API ───────────────────────────────────────────────────
+// ── シリアライズ / デシリアライズ ─────────────────────────────────────────────
 
 export function serializeAllConfigs(
   allConfigs: Map<BrushType, BrushConfig>,

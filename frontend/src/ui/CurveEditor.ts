@@ -1,23 +1,25 @@
 import { CurvePoint } from '../types';
 
-// ── Bezier helpers ────────────────────────────────────────────────────────────
+// ── ベジェ補間ヘルパー ────────────────────────────────────────────────────────
 
-function b1(t: number, p0: number, p1: number, p2: number, p3: number): number {
+// 3次ベジェ曲線の点を評価する（De Casteljau 式）
+function cubicBezier(t: number, p0: number, p1: number, p2: number, p3: number): number {
   const u = 1 - t;
   return u*u*u*p0 + 3*u*u*t*p1 + 3*u*t*t*p2 + t*t*t*p3;
 }
 
-function findT(x: number, x0: number, x1: number, x2: number, x3: number): number {
+// X 座標に対するベジェパラメータ t を二分探索で求める
+function findBezierT(x: number, x0: number, x1: number, x2: number, x3: number): number {
   let lo = 0, hi = 1;
   for (let k = 0; k < 32; k++) {
     const m = (lo + hi) * 0.5;
-    if (b1(m, x0, x1, x2, x3) < x) lo = m; else hi = m;
+    if (cubicBezier(m, x0, x1, x2, x3) < x) lo = m; else hi = m;
   }
   return (lo + hi) * 0.5;
 }
 
-// Catmull-Rom slope at s[i] (x-parameterized), used for auto-handles
-function cmSlope(s: CurvePoint[], i: number): number {
+// Catmull-Rom の接線スロープ（X 方向パラメータ化）。自動ハンドル算出に使う
+function catmullRomSlope(s: CurvePoint[], i: number): number {
   const n = s.length;
   if (i === 0)     return (s[1].y - s[0].y) / (s[1].x - s[0].x + 1e-9);
   if (i === n - 1) return (s[n-1].y - s[n-2].y) / (s[n-1].x - s[n-2].x + 1e-9);
@@ -26,22 +28,22 @@ function cmSlope(s: CurvePoint[], i: number): number {
 
 interface Ctrl { x: number; y: number; }
 
-// Catmull-Rom tangents → Bezier handles for segment i→i+1
-function autoCtrl(s: CurvePoint[], i: number): { p1: Ctrl; p2: Ctrl } {
+// Catmull-Rom 接線からセグメント i→i+1 のベジェハンドルを導出する
+function autoHandles(s: CurvePoint[], i: number): { p1: Ctrl; p2: Ctrl } {
   const p0 = s[i], p3 = s[i + 1];
   const dx = p3.x - p0.x;
-  const m0 = cmSlope(s, i)     * dx;
-  const m1 = cmSlope(s, i + 1) * dx;
+  const m0 = catmullRomSlope(s, i)     * dx;
+  const m1 = catmullRomSlope(s, i + 1) * dx;
   return {
     p1: { x: p0.x + dx / 3, y: p0.y + m0 / 3 },
     p2: { x: p3.x - dx / 3, y: p3.y - m1 / 3 },
   };
 }
 
-// Resolved control points for segment i (explicit handles if set, else auto)
-function segCtrl(s: CurvePoint[], i: number): { p1: Ctrl; p2: Ctrl } {
+// セグメント i の制御点を解決する（明示ハンドルがあれば使い、なければ自動）
+function segmentHandles(s: CurvePoint[], i: number): { p1: Ctrl; p2: Ctrl } {
   const p0 = s[i], p3 = s[i + 1];
-  const auto = autoCtrl(s, i);
+  const auto = autoHandles(s, i);
   const p1: Ctrl = (p0.rx !== undefined)
     ? { x: Math.max(p0.x, Math.min(p3.x, p0.rx)), y: p0.ry! }
     : auto.p1;
@@ -51,7 +53,7 @@ function segCtrl(s: CurvePoint[], i: number): { p1: Ctrl; p2: Ctrl } {
   return { p1, p2 };
 }
 
-// ── Public curve evaluation ───────────────────────────────────────────────────
+// ── カーブ評価（公開 API） ────────────────────────────────────────────────────
 
 export function evalCurve(pts: CurvePoint[], x: number): number {
   if (pts.length === 0) return 1;
@@ -65,12 +67,12 @@ export function evalCurve(pts: CurvePoint[], x: number): number {
     if (x <= s[j + 1].x) { i = j; break; }
   }
 
-  const { p1, p2 } = segCtrl(s, i);
-  const t = findT(x, s[i].x, p1.x, p2.x, s[i + 1].x);
-  return Math.max(0, Math.min(1, b1(t, s[i].y, p1.y, p2.y, s[i + 1].y)));
+  const { p1, p2 } = segmentHandles(s, i);
+  const t = findBezierT(x, s[i].x, p1.x, p2.x, s[i + 1].x);
+  return Math.max(0, Math.min(1, cubicBezier(t, s[i].y, p1.y, p2.y, s[i + 1].y)));
 }
 
-// ── Presets ───────────────────────────────────────────────────────────────────
+// ── プリセット ────────────────────────────────────────────────────────────────
 
 export const CURVE_PRESETS: Record<string, CurvePoint[]> = {
   flat:   [{ x: 0, y: 1 }, { x: 1, y: 1 }],
@@ -84,7 +86,7 @@ export interface CurveEditorOptions {
   xLabel?: string;
 }
 
-// ── Internal types ────────────────────────────────────────────────────────────
+// ── 内部型 ────────────────────────────────────────────────────────────────────
 
 type DragKind = 'anchor' | 'handleL' | 'handleR';
 interface Drag { kind: DragKind; idx: number; }
@@ -108,7 +110,7 @@ export class CurveEditor {
     this.initResize();
   }
 
-  // ── Public API ──────────────────────────────────────────────────────────────
+  // ── 公開 API ───────────────────────────────────────────────────────────────
 
   getPoints(): CurvePoint[] { return this.pts.map(p => ({ ...p })); }
 
@@ -129,28 +131,28 @@ export class CurveEditor {
     this.onChange?.(this.getPoints());
   }
 
-  // ── Sorted array (with original index attached) ─────────────────────────────
+  // ── ソート済み配列（元インデックス付き） ──────────────────────────────────────
 
   private sorted(): SortedPt[] {
     return this.pts.map((p, i) => ({ ...p, _oi: i })).sort((a, b) => a.x - b.x);
   }
 
-  // ── Computed handle (explicit or auto-Catmull-Rom) ──────────────────────────
+  // ── 制御ハンドルの算出（明示値または Catmull-Rom 自動） ─────────────────────
 
   private computedHandle(s: SortedPt[], si: number, side: 'L' | 'R'): Ctrl {
     const pt = s[si];
     if (side === 'L') {
       if (pt.lx !== undefined) return { x: pt.lx, y: pt.ly! };
-      if (si > 0) return segCtrl(s, si - 1).p2;
+      if (si > 0) return segmentHandles(s, si - 1).p2;
       return { x: pt.x, y: pt.y };
     } else {
       if (pt.rx !== undefined) return { x: pt.rx, y: pt.ry! };
-      if (si < s.length - 1) return segCtrl(s, si).p1;
+      if (si < s.length - 1) return segmentHandles(s, si).p1;
       return { x: pt.x, y: pt.y };
     }
   }
 
-  // ── Coordinate helpers ──────────────────────────────────────────────────────
+  // ── 座標変換ヘルパー ─────────────────────────────────────────────────────────
 
   private plotRect() {
     const P = this.PAD, W = this.W;
@@ -178,13 +180,13 @@ export class CurveEditor {
   private hw(): number { return Math.max(4, this.W / 30 | 0); }
   private hr(): number { return Math.max(3, this.W / 38 | 0); }
 
-  // ── Hit testing ─────────────────────────────────────────────────────────────
+  // ── ヒットテスト ──────────────────────────────────────────────────────────────
 
   private hitTest(cx: number, cy: number): { kind: DragKind; idx: number } | null {
     const s = this.sorted();
     const hr = this.hr() + 2;
 
-    // Handles first (so they're grabbable even when near an anchor)
+    // アンカーより先にハンドルを判定する（アンカー近傍でも掴めるように）
     for (let si = s.length - 1; si >= 0; si--) {
       if (si > 0) {
         const h = this.computedHandle(s, si, 'L');
@@ -198,7 +200,6 @@ export class CurveEditor {
       }
     }
 
-    // Anchors
     const hw = this.hw() + 2;
     for (let i = this.pts.length - 1; i >= 0; i--) {
       const [hx, hy] = this.toCanvas(this.pts[i].x, this.pts[i].y);
@@ -213,7 +214,7 @@ export class CurveEditor {
     return cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
   }
 
-  // ── Event binding ───────────────────────────────────────────────────────────
+  // ── イベント ──────────────────────────────────────────────────────────────────
 
   private setupEvents() {
     const cvs = this.canvas;
@@ -298,7 +299,7 @@ export class CurveEditor {
         pt.y = newY;
 
       } else {
-        // Handle drag — always mirror opposite handle across anchor
+        // ハンドルドラッグ: 対称ハンドルをアンカー中心で常にミラーする
         const ax = pt.x, ay = pt.y;
         if (kind === 'handleR') {
           pt.rx = lx;          pt.ry = ly;
@@ -320,7 +321,7 @@ export class CurveEditor {
     cvs.addEventListener('pointercancel', () => { this.drag = null; });
   }
 
-  // ── Sizing ──────────────────────────────────────────────────────────────────
+  // ── リサイズ ──────────────────────────────────────────────────────────────────
 
   private initResize() {
     const sync = () => {
@@ -335,7 +336,7 @@ export class CurveEditor {
     requestAnimationFrame(sync);
   }
 
-  // ── Rendering ───────────────────────────────────────────────────────────────
+  // ── レンダリング ──────────────────────────────────────────────────────────────
 
   render() {
     const { canvas, W } = this;
@@ -351,7 +352,7 @@ export class CurveEditor {
     ctx.fillStyle = isLight ? '#c8c8d6' : '#0c0c12';
     ctx.fillRect(x0, y0, pw, ph);
 
-    // Grid
+    // グリッド
     ctx.strokeStyle = isLight ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.08)';
     ctx.lineWidth = 0.5;
     ctx.setLineDash([]);
@@ -366,7 +367,7 @@ export class CurveEditor {
     ctx.lineWidth = 1;
     ctx.strokeRect(x0, y0, pw, ph);
 
-    // Axis labels
+    // 軸ラベル
     const fs = Math.max(8, W / 22 | 0);
     ctx.font = `${fs}px sans-serif`;
     const lc = isLight ? 'rgba(20,20,50,0.5)' : 'rgba(200,200,230,0.45)';
@@ -389,7 +390,7 @@ export class CurveEditor {
     ctx.fillText('出力', 0, 0);
     ctx.restore();
 
-    // Linear reference (dotted)
+    // 線形参照（点線）
     ctx.strokeStyle = isLight ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.22)';
     ctx.lineWidth   = 1;
     ctx.setLineDash([3, 3]);
@@ -400,7 +401,7 @@ export class CurveEditor {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // ── Bezier curve ──────────────────────────────────────────────────────────
+    // ── ベジェ曲線 ────────────────────────────────────────────────────────────
     const s = this.sorted();
     ctx.strokeStyle = '#5b8fff';
     ctx.lineWidth   = 1.5;
@@ -408,7 +409,7 @@ export class CurveEditor {
     const [s0x, s0y] = this.toCanvas(s[0].x, s[0].y);
     ctx.moveTo(s0x, s0y);
     for (let i = 0; i < s.length - 1; i++) {
-      const { p1, p2 } = segCtrl(s, i);
+      const { p1, p2 } = segmentHandles(s, i);
       const [c1x, c1y] = this.toCanvas(p1.x, p1.y);
       const [c2x, c2y] = this.toCanvas(p2.x, p2.y);
       const [epx, epy] = this.toCanvas(s[i + 1].x, s[i + 1].y);
@@ -416,7 +417,7 @@ export class CurveEditor {
     }
     ctx.stroke();
 
-    // ── Handles and anchors ───────────────────────────────────────────────────
+    // ── ハンドルとアンカー ────────────────────────────────────────────────────
     const hr = this.hr();
     const hw = this.hw();
 

@@ -1,8 +1,8 @@
 import { StrokeSettings, BrushConfig, ParamId } from '../types';
 import { evalCurve } from '../ui/CurveEditor';
 
-// ── Internal dab state ────────────────────────────────────────────────────────
-interface State {
+// ── ストローク内部状態 ────────────────────────────────────────────────────────
+interface StrokeState {
   prevX: number;
   prevY: number;
   prevP: number;
@@ -16,7 +16,7 @@ interface State {
   rng:  number;
 }
 
-function mkState(): State {
+function createStrokeState(): StrokeState {
   return {
     prevX: 0, prevY: 0, prevP: 0,
     dirX: 1, dirY: 0, distAccum: 0,
@@ -25,12 +25,12 @@ function mkState(): State {
   };
 }
 
-function nextRng(s: State): number {
+function nextRng(s: StrokeState): number {
   s.rng = Math.imul(48271, s.rng) | 0;
   return (s.rng & 0x7fffffff) / 0x7fffffff * 2 - 1;
 }
 
-function resolveParam(s: State, pid: ParamId, base: number, pressure: number, normSpeed: number,
+function resolveParam(s: StrokeState, pid: ParamId, base: number, pressure: number, normSpeed: number,
                       cfg: BrushConfig): number {
   const m = cfg.modifiers[pid];
   let mult = evalCurve(m.pressureCurve, pressure) * evalCurve(m.speedCurve, normSpeed);
@@ -58,23 +58,26 @@ function paperNoise(x: number, y: number): number {
 }
 
 /**
- * The BrushEngine is the TypeScript fallback drawing implementation.
- * Opacity applies to the whole stroke: all dabs accumulate into strokeBuf at full
- * density, then strokeBuf is composited against preStrokeImg with opa as the
- * stroke-level alpha multiplier. Density controls per-dab alpha independently.
+ * TypeScript フォールバック描画実装。
+ *
+ * 不透明度はストローク全体に適用する設計になっている。
+ * 各ダブは strokeBuf にフル濃度で蓄積され、ストローク終了後に
+ * preStrokeImg との合成時にストロークレベルの不透明度（opa）で乗算される。
+ * これにより「重ね塗り」の見た目を正確に再現できる。
+ * density はダブごとのアルファを独立して制御する（opa とは独立）。
  */
 export class BrushEngine {
-  private state: State = mkState();
+  private state: StrokeState = createStrokeState();
   private preStrokeImg: ImageData | null = null;
-  private strokeBuf: Uint8ClampedArray | null = null;   // accumulated dabs, transparent bg
-  private strokeAlphaBuf: Float32Array | null = null;   // for blur anti-overdraw
+  private strokeBuf: Uint8ClampedArray | null = null;   // 蓄積ダブバッファ（透明背景）
+  private strokeAlphaBuf: Float32Array | null = null;   // ぼかし重複描画防止用アルファ
 
   constructor(private ctx: CanvasRenderingContext2D) {}
 
   dispose() {}
 
   beginStroke(x: number, y: number, pressure: number, speed: number, s: StrokeSettings) {
-    this.state = mkState();
+    this.state = createStrokeState();
     this.state.prevX = x; this.state.prevY = y; this.state.prevP = pressure;
     const CW = this.ctx.canvas.width, CH = this.ctx.canvas.height;
     this.preStrokeImg = this.ctx.getImageData(0, 0, CW, CH);
@@ -137,7 +140,7 @@ export class BrushEngine {
     }
   }
 
-  // Blend (r,g,b,a) into a strokeBuf patch using Porter-Duff over. r/g/b are 0-255.
+  // (r,g,b,a) を Porter-Duff over で strokeBuf パッチにブレンドする。r/g/b は 0-255
   private blendPxBuf(sb: Uint8ClampedArray, pw: number, ph: number, lx: number, ly: number,
                      r: number, g: number, b: number, a: number) {
     if (lx < 0 || ly < 0 || lx >= pw || ly >= ph) return;
@@ -152,7 +155,7 @@ export class BrushEngine {
     sb[i+3] = outA * 255;
   }
 
-  // Direct canvas read/write patch — for eraser and blur.
+  // キャンバスを直接読み書きするパッチ処理（消しゴム・ぼかしに使用）
   private patchDabDirect(cx: number, cy: number, rad: number, extra: number,
       fn: (img: ImageData, ox: number, oy: number) => void) {
     const CW = this.ctx.canvas.width, CH = this.ctx.canvas.height, r = Math.ceil(rad + extra + 1);
@@ -162,8 +165,8 @@ export class BrushEngine {
     const img = this.ctx.getImageData(x0, y0, pw, ph); fn(img, x0, y0); this.ctx.putImageData(img, x0, y0);
   }
 
-  // strokeBuf patch — accumulates dab into strokeBuf, then composites to canvas.
-  // fn receives: (strokeBuf patch, pw, ph, current visible canvas patch, ox, oy)
+  // strokeBuf パッチ処理。ダブを strokeBuf に蓄積し、preStrokeImg と opa で合成してキャンバスに描画する。
+  // fn の引数: (strokeBuf パッチ, pw, ph, 現在のキャンバスパッチ, ox, oy)
   private patchDab(cx: number, cy: number, rad: number, extra: number, opa: number,
       fn: (sbData: Uint8ClampedArray, pw: number, ph: number, visData: Uint8ClampedArray, ox: number, oy: number) => void) {
     const CW = this.ctx.canvas.width, CH = this.ctx.canvas.height;
@@ -306,7 +309,7 @@ export class BrushEngine {
 
   private dabWatercolor(cx: number, cy: number, rad: number, flow: number, opa: number, s: StrokeSettings) {
     this.patchDab(cx, cy, rad, 0, opa, (sb, pw, ph, vis, ox, oy) => {
-      // Sample from current visible canvas (vis) for wet mixing
+      // 現在のキャンバス（vis）からウェット混色のために色をサンプリングする
       const [ar, ag, ab] = this.avgColor(vis, pw, ph, cx, cy, rad * 0.6, ox, oy);
       const st = this.state; if (!st.wetInit) { st.wetR = ar; st.wetG = ag; st.wetB = ab; st.wetInit = true; }
       st.wetR = lerp(lerp(ar, st.wetR, s.brushConfig.spread * 0.5), s.color[0], s.brushConfig.mixing * 0.7);
@@ -351,9 +354,9 @@ export class BrushEngine {
   }
 
   private dabBlur(cx: number, cy: number, rad: number, flow: number, s: StrokeSettings) {
-    const b = Math.max(1, rad * 0.2 | 0), rr = rad * rad;
+    const blurKernelRadius = Math.max(1, rad * 0.2 | 0), rr = rad * rad;
     const CW = this.ctx.canvas.width, pre = this.preStrokeImg;
-    this.patchDabDirect(cx, cy, rad, b, (img, ox, oy) => {
+    this.patchDabDirect(cx, cy, rad, blurKernelRadius, (img, ox, oy) => {
       const pw = img.width, ph = img.height, ab = this.strokeAlphaBuf;
       if (!pre || !ab) return;
       for (let ly = 0; ly < ph; ly++) for (let lx = 0; lx < pw; lx++) {
@@ -361,7 +364,7 @@ export class BrushEngine {
         const st = softAlpha(Math.sqrt(d2) / rad, 0) * flow; if (st < 0.005) continue;
         const bi = (ly + oy) * CW + (lx + ox); if (st <= ab[bi]) continue; ab[bi] = st;
         let sr = 0, sg = 0, sb = 0, sa = 0, c = 0;
-        for (let ky = (ly+oy) - b; ky <= (ly+oy) + b; ky++) for (let kx = (lx+ox) - b; kx <= (lx+ox) + b; kx++) {
+        for (let ky = (ly+oy) - blurKernelRadius; ky <= (ly+oy) + blurKernelRadius; ky++) for (let kx = (lx+ox) - blurKernelRadius; kx <= (lx+ox) + blurKernelRadius; kx++) {
           if (ky >= 0 && ky < this.ctx.canvas.height && kx >= 0 && kx < CW) { const k = (ky * CW + kx) * 4; sr += pre.data[k]; sg += pre.data[k+1]; sb += pre.data[k+2]; sa += pre.data[k+3]; c++; }
         }
         if (c) { const i = (ly * pw + lx) * 4; img.data[i] = lerp(pre.data[bi*4], sr / c, st); img.data[i+1] = lerp(pre.data[bi*4+1], sg / c, st); img.data[i+2] = lerp(pre.data[bi*4+2], sb / c, st); img.data[i+3] = lerp(pre.data[bi*4+3], sa / c, st); }

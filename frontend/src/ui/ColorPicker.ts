@@ -1,4 +1,4 @@
-// HSV color wheel + SV square + RGB/HSL/Hex inputs
+// HSV カラーホイール + SV 正方形 + RGB/HSL/Hex 入力
 
 type RGB = [number, number, number];
 
@@ -75,8 +75,8 @@ function rgbToHex(r: number, g: number, b: number): string {
 
 export class ColorPicker {
   private H = 0;   // 0-360
-  private S = 1;   // 0-1 (HSV saturation)
-  private V = 1;   // 0-1 (HSV value)
+  private S = 1;   // 0-1（HSV 彩度）
+  private V = 1;   // 0-1（HSV 明度）
 
   private canvas: HTMLCanvasElement;
   private ctx2d: CanvasRenderingContext2D;
@@ -119,7 +119,7 @@ export class ColorPicker {
 
     ctx.clearRect(0, 0, sz, sz);
 
-    // Hue ring
+    // 色相リング
     for (let i = 0; i < 360; i++) {
       const a0 = (i - 0.5) * Math.PI / 180 - Math.PI / 2;
       const a1 = (i + 1.5) * Math.PI / 180 - Math.PI / 2;
@@ -132,7 +132,7 @@ export class ColorPicker {
       ctx.fill();
     }
 
-    // Hue indicator
+    // 色相インジケーター
     const ha = this.H * Math.PI / 180 - Math.PI / 2;
     const midR = (outerR + innerR) / 2;
     const hx = cx + Math.cos(ha) * midR;
@@ -148,7 +148,7 @@ export class ColorPicker {
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    // SV square inside ring
+    // リング内部の SV 正方形
     const sqR = innerR * 0.9;
     const sqHalf = sqR / Math.SQRT2;
     const sqX = cx - sqHalf;
@@ -171,7 +171,7 @@ export class ColorPicker {
     ctx.fillStyle = bg;
     ctx.fillRect(sqX, sqY, sqW, sqW);
 
-    // SV indicator
+    // SV インジケーター
     const svX = sqX + this.S * sqW;
     const svY = sqY + (1 - this.V) * sqW;
     ctx.beginPath();
@@ -182,9 +182,7 @@ export class ColorPicker {
   }
 
   private setupEvents() {
-    let lastPointerType = 'mouse';
     const onDown = (e: PointerEvent) => {
-      lastPointerType = e.pointerType;
       const pos = this.canvasPos(e);
       const cx = this.SIZE / 2, cy = this.SIZE / 2;
       const dx = pos.x - cx, dy = pos.y - cy;

@@ -1,12 +1,4 @@
-/**
- * Shared utility functions for the Oekaki Chat Neo frontend.
- */
-
-/**
- * Escapes special HTML characters in a string to prevent XSS attacks.
- * @param s The string to escape.
- * @returns The escaped string.
- */
+// XSS 対策のため、HTML に埋め込む前に特殊文字をエスケープする
 export function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')

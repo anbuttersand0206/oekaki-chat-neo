@@ -43,12 +43,16 @@ cd oekaki-chat-neo
 cp .env.example .env
 ```
 
-`.env` を開いて以下の 2 項目を設定する。
+`.env` を開いて以下の項目を設定する。
 
-| 変数 | 用途 |
-|------|------|
-| `POSTGRES_PASSWORD` | PostgreSQL のパスワード（任意の文字列） |
-| `DJANGO_SECRET_KEY` | Django の署名キー（任意の長い文字列） |
+| 変数 | 必須 | 用途 |
+|------|------|------|
+| `POSTGRES_PASSWORD` | ✓ | PostgreSQL のパスワード（任意の文字列） |
+| `DJANGO_SECRET_KEY` | ✓ | Django の署名キー（任意の長い文字列） |
+| `GOOGLE_CLIENT_ID` | 任意 | Google SSO を使う場合のみ設定（未設定でもメール+パスワードログインは動作する） |
+| `GOOGLE_CLIENT_SECRET` | 任意 | 同上 |
+
+Google SSO の取得手順は `.env.example` のコメントを参照。
 
 ---
 
@@ -65,7 +69,25 @@ docker compose up --build -d
 
 ---
 
-## 5. 停止
+## 5. 最初のユーザーを作成する
+
+アプリ起動後、ブラウザを開くとログイン画面にリダイレクトされる。  
+初回のみ以下のコマンドで管理者ユーザーを作成する。
+
+```bash
+docker compose exec backend python manage.py createsuperuser
+```
+
+対話形式でメールアドレス・ユーザー名・パスワードを入力する。  
+作成後はブラウザのログイン画面からそのメールアドレスとパスワードでログインできる。
+
+> **補足**  
+> Google SSO でログインする場合は `createsuperuser` は不要。  
+> `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` を設定してからログイン画面の「Google でログイン」を使う。
+
+---
+
+## 6. 停止
 
 ```bash
 # Ctrl+C でコンテナを止めた後
@@ -88,6 +110,7 @@ http://localhost:8080
     └── nginx（frontend コンテナ）
           ├── /            → Vite ビルド済み静的ファイルを配信
           ├── /api/*       → proxy → backend コンテナ :3001
+          ├── /accounts/*  → proxy → backend コンテナ :3001 (allauth / Google SSO コールバック)
           └── /socket.io/* → proxy → backend コンテナ :3001 (WebSocket)
 ```
 
@@ -189,6 +212,7 @@ export PGPASSWORD=your_password
 export DJANGO_SECRET_KEY=dev-secret-key
 
 python manage.py migrate
+python manage.py createsuperuser   # 初回のみ：ログイン用ユーザーを作成
 uvicorn oekaki.asgi:application --host 0.0.0.0 --port 3001
 # → http://localhost:3001
 

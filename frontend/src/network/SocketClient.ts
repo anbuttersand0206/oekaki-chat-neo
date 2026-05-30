@@ -2,10 +2,10 @@ import { io, Socket } from 'socket.io-client';
 import { DrawOp, User } from '../types';
 
 /**
- * The SocketClient manages the real-time WebSocket connection to the backend.
- * It uses Socket.IO for reliable communication and provides a high-level API
- * for joining rooms, emitting drawing operations, and handling incoming events
- * with an isolated error-handling wrapper.
+ * バックエンドとのリアルタイム WebSocket 接続を管理する。
+ *
+ * 各ハンドラは wrapEventHandler でラップされており、
+ * 1つのハンドラが例外を投げても他のイベント処理が止まらないようにしている。
  */
 export class SocketClient {
   private socket: Socket;
@@ -20,16 +20,17 @@ export class SocketClient {
   onReconnectFailed?: () => void;
 
   constructor() {
+    // autoConnect: false — ログイン確定後に connect() を明示的に呼ぶまで接続しない。
+    // 起動時に即接続すると未認証で拒否され、ログイン後も再接続されないままになるため。
     this.socket = io({
       path: '/socket.io',
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
-      reconnectionAttempts: 10
+      reconnectionAttempts: 10,
+      autoConnect: false,
     });
 
-    // ハンドラ内の例外を隔離してログするラッパー。
-    // 1つのハンドラが throw しても他のイベント処理が止まらないようにするため。
     const wrapEventHandler = (eventName: string, fn: () => void) => {
       try { fn(); } catch (e) { console.error(`[socket:${eventName}]`, e); }
     };
@@ -42,13 +43,27 @@ export class SocketClient {
     this.socket.on('cursor_move',  (data) => wrapEventHandler('cursor_move',  () => this.onCursorMove?.(data)));
     this.socket.on('chat_message', (data) => wrapEventHandler('chat_message', () => this.onChatMessage?.(data)));
 
-    this.socket.on('connect',            () => console.log('Socket connected'));
-    this.socket.on('disconnect',   (reason) => console.warn('Socket disconnected:', reason));
-    this.socket.on('reconnect_failed',   () => this.onReconnectFailed?.());
+    this.socket.on('connect',          () => console.log('Socket connected'));
+    this.socket.on('disconnect', (reason) => console.warn('Socket disconnected:', reason));
+    this.socket.on('connect_error', (err) => {
+      console.error('Socket connection error:', err);
+      this.onRoomError?.({ code: 'CONNECT_ERROR', message: `サーバーへの接続に失敗しました: ${err.message}` });
+    });
+    this.socket.on('error', (err) => {
+      console.error('Socket error:', err);
+    });
+    this.socket.on('reconnect_failed', () => this.onReconnectFailed?.());
   }
 
-  joinRoom(roomId: string, password: string, username: string) {
-    this.socket.emit('join_room', { roomId, password, username });
+  connect(): void {
+    // 未接続の場合だけ接続する（既接続なら no-op）
+    if (!this.socket.connected) {
+      this.socket.connect();
+    }
+  }
+
+  joinRoom(roomId: string, password: string) {
+    this.socket.emit('join_room', { roomId, password });
   }
 
   emitDrawOp(op: DrawOp) {

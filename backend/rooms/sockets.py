@@ -1,9 +1,9 @@
 import asyncio
+import http.cookies
 import json as json_mod
 import logging
 import os
 import time
-import uuid
 from datetime import timedelta
 from typing import Any, Optional
 
@@ -14,15 +14,17 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 CORS_ORIGIN = os.environ.get('CORS_ORIGIN', 'http://localhost:8080')
-MAX_BUFFER = 20 * 1024 * 1024  # 20 MB (canvas state)
+MAX_BUFFER = 20 * 1024 * 1024  # 20 MB（キャンバス状態の送受信に対応するため大きめに設定）
 ROOM_TTL_MINUTES = 30
-CLEANUP_INTERVAL_SECONDS = 5 * 60  # Check DB every 5 minutes
+ROOM_MAX_LIFETIME_HOURS = 24
+CLEANUP_INTERVAL_SECONDS = 5 * 60
 
-# ── Validation constants ───────────────────────────────────────────────────────
-_MAX_CANVAS_BYTES = 3 * 1024 * 1024        # 3 MB — WebP at 0.85q for 1600×1200 fits well under this
-_MAX_POINTS = 5_000                         # max dab points per stroke op
-_MAX_BRUSH_JSON = 64_000                    # 64 KB for serialised brush settings
+# ── バリデーション定数 ──────────────────────────────────────────────────────────
+_MAX_CANVAS_BYTES = 3 * 1024 * 1024
+_MAX_POINTS = 5_000
+_MAX_BRUSH_JSON = 64_000
 _VALID_OP_TYPES = frozenset({'stroke', 'fill', 'clear', 'paste'})
+# 枯渇防止のため IP エントリ数に上限を設ける
 _MAX_RATE_ENTRIES = 10_000
 
 sio = socketio.AsyncServer(
@@ -31,35 +33,67 @@ sio = socketio.AsyncServer(
     max_http_buffer_size=MAX_BUFFER,
 )
 
-# ── In-memory state ────────────────────────────────────────────────────────────
-# active_users: room_id -> {sid: {id, name}}
+# ── インメモリ状態 ──────────────────────────────────────────────────────────────
+# active_users: room_id → {sid: {id, name}}  id は str(accounts.User.id)
 active_users: dict[str, dict[str, dict[str, str]]] = {}
-# join_attempts: ip -> {count, reset_at}
+# join_attempts: ip → {count, reset_at}
 join_attempts: dict[str, dict[str, Any]] = {}
-# Background cleanup task (runs once)
-_cleanup_task: Optional[asyncio.Task] = None
+_cleanup_task_started = False
 
 
 async def _cleanup_loop() -> None:
-    """Periodically deletes rooms that have been empty for too long."""
     from .models import Room
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
         try:
-            cutoff = timezone.now() - timedelta(minutes=ROOM_TTL_MINUTES)
-            deleted, _ = await Room.objects.filter(last_emptied_at__lt=cutoff).adelete()
-            if deleted:
-                logger.info(f'[cleanup] {deleted} stale room(s) deleted')
+            now = timezone.now()
+            # 1. 空室になってから 30 分以上経過した部屋を削除
+            cutoff_empty = now - timedelta(minutes=ROOM_TTL_MINUTES)
+            deleted_empty, _ = await Room.objects.filter(last_emptied_at__lt=cutoff_empty).adelete()
+
+            # 2. 作成から 24 時間以上経過した部屋を削除（絶対的なライフサイクル管理）
+            cutoff_age = now - timedelta(hours=ROOM_MAX_LIFETIME_HOURS)
+            deleted_old, _ = await Room.objects.filter(created_at__lt=cutoff_age).adelete()
+
+            if deleted_empty or deleted_old:
+                logger.info(f'[cleanup] 削除完了 (空室:{deleted_empty}, 老朽:{deleted_old})')
         except Exception as e:
-            logger.error(f'[cleanup] error during cleanup: {e}', exc_info=True)
+            logger.error(f'[cleanup] クリーンアップ中にエラーが発生しました: {e}', exc_info=True)
+
+
+async def _get_session_user(cookie_str: str):
+    """Django セッション Cookie を検証し、認証済み User を返す。無効な場合は None。"""
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.contrib.auth import get_user_model
+
+    if not cookie_str:
+        return None
+
+    try:
+        cookies = http.cookies.SimpleCookie()
+        cookies.load(cookie_str)
+        morsel = cookies.get('sessionid')
+        if not morsel:
+            return None
+
+        session = SessionStore(session_key=morsel.value)
+        # SessionStore はブロッキング I/O なのでスレッドプールに委譲する
+        # session.get は第2引数がない場合 None を返す
+        auth_user_id = await asyncio.to_thread(session.get, '_auth_user_id')
+        if not auth_user_id:
+            return None
+
+        User = get_user_model()
+        return await User.objects.aget(id=int(auth_user_id), is_active=True)
+    except Exception as e:
+        logger.error(f'[get_session_user] Error: {e}')
+        return None
 
 
 def _is_rate_limited(ip: str) -> bool:
-    """Checks if an IP address is exceeding the join room rate limit."""
     now = time.time()
     entry = join_attempts.get(ip)
     if not entry or now > entry['reset_at']:
-        # Purge expired entries when the dict grows too large
         if len(join_attempts) > _MAX_RATE_ENTRIES:
             expired = [k for k, v in join_attempts.items() if now > v['reset_at']]
             for k in expired:
@@ -71,37 +105,76 @@ def _is_rate_limited(ip: str) -> bool:
 
 
 def _is_valid_data_url(value: Any) -> bool:
-    """Returns True if value is a string starting with data:image/ within size limit."""
     return (isinstance(value, str)
             and value.startswith('data:image/')
             and len(value) <= _MAX_CANVAS_BYTES)
 
 
-# ── Handlers ───────────────────────────────────────────────────────────────────
+# ── ハンドラ ────────────────────────────────────────────────────────────────────
 
 async def on_connect(sid: str, environ: dict, auth: Optional[Any] = None) -> None:
-    """Handles new Socket.IO connections and initializes cleanup task."""
-    global _cleanup_task
-    if _cleanup_task is None or _cleanup_task.done():
-        _cleanup_task = asyncio.create_task(_cleanup_loop())
+    global _cleanup_task_started
+    # 接続時にクリーンアップループが動いていなければ起動する
+    if not _cleanup_task_started:
+        sio.start_background_task(_cleanup_loop)
+        _cleanup_task_started = True
 
-    headers = {k.decode().lower(): v.decode() for k, v in environ.get('headers', [])}
-    ip = (headers.get('x-real-ip')
-          or headers.get('x-forwarded-for', '').split(',')[0].strip()
-          or (environ.get('client') or [''])[0])
-    await sio.save_session(sid, {'ip': ip})
+    # python-engineio は ASGI scope の headers を HTTP_* 形式（WSGI-like）に変換して渡す。
+    # そのため Cookie は environ['HTTP_COOKIE'] に格納されている。
+    ip = (environ.get('HTTP_X_REAL_IP')
+          or environ.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
+          or environ.get('REMOTE_ADDR', ''))
+
+    cookie_str = environ.get('HTTP_COOKIE', '')
+    user = await _get_session_user(cookie_str)
+    
+    # cookie_str をセッションに保持しておくことで、on_join_room のフォールバック認証に再利用できる
+    session_data = {'ip': ip, 'cookie_str': cookie_str}
+    if user:
+        session_data.update({
+            'auth_user_id': user.id,
+            'username': user.username,
+        })
+    else:
+        logger.warning(f'[connect] 未認証の接続を許可しました（操作時に認証チェック）: sid={sid}')
+
+    await sio.save_session(sid, session_data)
+    # 接続を拒否せず、Room 参加時に auth_user_id の有無で権限チェックを行う。
+    # これにより、Cookie の不備などで未認証扱いになった場合にクライアントへエラーを返せるようになる。
+    return True
 
 
 async def on_join_room(sid: str, data: Any) -> None:
-    """Handles room entry requests, validating credentials and state."""
-    from .models import Room, BrushSettings, ChatMessage
+    from .models import Room, BrushSettings, ChatMessage, UserRoom
 
     if not isinstance(data, dict):
         await sio.emit('room_error', {'code': 'INVALID', 'message': '入力が不正です'}, to=sid)
         return
 
     session = await sio.get_session(sid)
+    
+    # セッションが存在しない、または auth_user_id がない場合は、
+    # on_connect 時に保存した cookie_str で再認証を試みる
+    if not session or not session.get('auth_user_id'):
+        cookie_str = session.get('cookie_str', '') if session else ''
+        user = await _get_session_user(cookie_str)
+        if user:
+            # 認証成功したのでセッションを更新
+            auth_user_id = user.id
+            username = user.username
+            ip = session.get('ip', '') if session else ''
+            session = {'ip': ip, 'auth_user_id': auth_user_id, 'username': username}
+            await sio.save_session(sid, session)
+        else:
+            await sio.emit('room_error', {
+                'code': 'UNAUTHORIZED',
+                'message': '認証セッションが見つかりません。再ログインしてください。'
+            }, to=sid)
+            return
+
     ip = session.get('ip', '')
+    auth_user_id = session.get('auth_user_id')
+    username = session.get('username')
 
     if _is_rate_limited(ip):
         await sio.emit('room_error', {
@@ -112,74 +185,83 @@ async def on_join_room(sid: str, data: Any) -> None:
 
     room_id = str(data.get('roomId', '')).strip()
     password = str(data.get('password', ''))
-    username = str(data.get('username', '')).strip()[:20]
 
-    if not room_id or not password or not username:
+    if not room_id or not password:
         await sio.emit('room_error', {'code': 'INVALID', 'message': '入力が不正です'}, to=sid)
         return
 
     try:
-        room = await Room.objects.aget(id=room_id)
-    except Room.DoesNotExist:
-        await sio.emit('room_error', {'code': 'NOT_FOUND', 'message': '部屋が見つかりません'}, to=sid)
-        return
+        try:
+            room = await Room.objects.aget(id=room_id)
+        except Room.DoesNotExist:
+            await sio.emit('room_error', {'code': 'NOT_FOUND', 'message': '部屋が見つかりません'}, to=sid)
+            return
 
-    users = active_users.get(room_id, {})
-    if len(users) >= room.max_users:
-        await sio.emit('room_error', {
-            'code': 'FULL',
-            'message': f'部屋が満員です（最大{room.max_users}人）',
+        users = active_users.get(room_id, {})
+        if len(users) >= room.max_users:
+            await sio.emit('room_error', {
+                'code': 'FULL',
+                'message': f'部屋が満員です（最大{room.max_users}人）',
+            }, to=sid)
+            return
+
+        # bcrypt はブロッキング処理なのでスレッドプールに委譲する
+        valid = await asyncio.to_thread(
+            bcrypt.checkpw, password.encode(), room.password_hash.encode()
+        )
+        if not valid:
+            await sio.emit('room_error', {'code': 'WRONG_PASSWORD', 'message': 'パスワードが違います'}, to=sid)
+            return
+
+        # 誰かが入室したのでクリーンアップ対象から外す
+        await Room.objects.filter(id=room_id).aupdate(last_emptied_at=None)
+
+        # ダッシュボード表示のために参加履歴を保存する
+        await UserRoom.objects.aupdate_or_create(
+            user_id=auth_user_id,
+            room_id=room_id,
+            defaults={},
+        )
+
+        try:
+            brush_settings_record = await BrushSettings.objects.aget(user_id=auth_user_id)
+            brush_settings = brush_settings_record.settings
+        except BrushSettings.DoesNotExist:
+            brush_settings = None
+
+        chat_history = []
+        async for msg in ChatMessage.objects.filter(room_id=room_id).order_by('-created_at')[:50]:
+            chat_history.append({
+                'userId': str(msg.user_id) if msg.user_id else None,
+                'username': msg.username,
+                'message': msg.message,
+                'time': int(msg.created_at.timestamp() * 1000),
+            })
+        chat_history.reverse()
+
+        user_id = str(auth_user_id)
+        if room_id not in active_users:
+            active_users[room_id] = {}
+        active_users[room_id][sid] = {'id': user_id, 'name': username}
+
+        await sio.save_session(sid, {**session, 'room_id': room_id, 'user_id': user_id})
+        await sio.enter_room(sid, room_id)
+
+        await sio.emit('room_joined', {
+            'roomId': room_id,
+            'userId': user_id,
+            'users': [{'id': u['id'], 'name': u['name']} for u in active_users[room_id].values()],
+            'canvasState': room.canvas_state,
+            'brushSettings': brush_settings,
+            'chatHistory': chat_history,
         }, to=sid)
-        return
-
-    valid = await asyncio.to_thread(
-        bcrypt.checkpw, password.encode(), room.password_hash.encode()
-    )
-    if not valid:
-        await sio.emit('room_error', {'code': 'WRONG_PASSWORD', 'message': 'パスワードが違います'}, to=sid)
-        return
-
-    # Clear empty timestamp if user rejoins
-    await Room.objects.filter(id=room_id).aupdate(last_emptied_at=None)
-
-    try:
-        brush_settings_record = await BrushSettings.objects.aget(username=username)
-        brush_settings = brush_settings_record.settings
-    except BrushSettings.DoesNotExist:
-        brush_settings = None
-
-    # Fetch recent chat history (limit to 50 for payload efficiency)
-    chat_history = []
-    async for msg in ChatMessage.objects.filter(room_id=room_id).order_by('-created_at')[:50]:
-        chat_history.append({
-            'userId': msg.user_id,
-            'username': msg.username,
-            'message': msg.message,
-            'time': int(msg.created_at.timestamp() * 1000),
-        })
-    chat_history.reverse()
-
-    user_id = str(uuid.uuid4())
-    if room_id not in active_users:
-        active_users[room_id] = {}
-    active_users[room_id][sid] = {'id': user_id, 'name': username}
-
-    await sio.save_session(sid, {**session, 'room_id': room_id, 'user_id': user_id, 'username': username})
-    await sio.enter_room(sid, room_id)
-
-    await sio.emit('room_joined', {
-        'roomId': room_id,
-        'userId': user_id,
-        'users': [{'id': u['id'], 'name': u['name']} for u in active_users[room_id].values()],
-        'canvasState': room.canvas_state,
-        'brushSettings': brush_settings,
-        'chatHistory': chat_history,
-    }, to=sid)
-    await sio.emit('user_joined', {'id': user_id, 'name': username}, room=room_id, skip_sid=sid)
+        await sio.emit('user_joined', {'id': user_id, 'name': username}, room=room_id, skip_sid=sid)
+    except Exception as e:
+        logger.error(f'[on_join_room] 部屋 {room_id} への参加中にエラーが発生しました: {e}', exc_info=True)
+        await sio.emit('room_error', {'code': 'INTERNAL_ERROR', 'message': '内部エラーが発生しました'}, to=sid)
 
 
 async def on_draw_op(sid: str, data: Any) -> None:
-    """Validates and broadcasts drawing operations to other users in the same room."""
     session = await sio.get_session(sid)
     room_id = session.get('room_id')
     if not room_id or not isinstance(data, dict):
@@ -202,7 +284,6 @@ async def on_draw_op(sid: str, data: Any) -> None:
 
 
 async def on_canvas_state(sid: str, data: dict) -> None:
-    """Persists current canvas state to the database."""
     from .models import Room
     session = await sio.get_session(sid)
     room_id = session.get('room_id')
@@ -214,11 +295,10 @@ async def on_canvas_state(sid: str, data: dict) -> None:
     try:
         await Room.objects.filter(id=room_id).aupdate(canvas_state=image_data)
     except Exception as e:
-        logger.error(f'[canvas_state] DB update failed for room {room_id}: {e}', exc_info=True)
+        logger.error(f'[canvas_state] 部屋 {room_id} の DB 更新に失敗しました: {e}', exc_info=True)
 
 
 async def on_cursor_move(sid: str, data: dict) -> None:
-    """Broadcasts remote cursor movements to other users."""
     session = await sio.get_session(sid)
     room_id = session.get('room_id')
     if not room_id:
@@ -232,13 +312,12 @@ async def on_cursor_move(sid: str, data: dict) -> None:
 
 
 async def on_chat_message(sid: str, data: Any) -> None:
-    """Handles incoming chat messages and persists them."""
     from .models import ChatMessage
     if not isinstance(data, dict):
         return
     session = await sio.get_session(sid)
     room_id = session.get('room_id')
-    user_id = session.get('user_id')
+    auth_user_id = session.get('auth_user_id')
     username = session.get('username')
     message = str(data.get('message', ''))[:500]
     if not room_id or not message:
@@ -247,15 +326,15 @@ async def on_chat_message(sid: str, data: Any) -> None:
     try:
         await ChatMessage.objects.acreate(
             room_id=room_id,
-            user_id=user_id,
+            user_id=auth_user_id,
             username=username,
             message=message,
         )
     except Exception as e:
-        logger.error(f'[chat_message] DB insertion failed for room {room_id}: {e}', exc_info=True)
+        logger.error(f'[chat_message] 部屋 {room_id} への DB 保存に失敗しました: {e}', exc_info=True)
         return
     await sio.emit('chat_message', {
-        'userId': user_id,
+        'userId': str(auth_user_id),
         'username': username,
         'message': message,
         'time': timestamp_ms,
@@ -263,28 +342,26 @@ async def on_chat_message(sid: str, data: Any) -> None:
 
 
 async def on_brush_settings(sid: str, data: Any) -> None:
-    """Updates user-specific brush settings in the database."""
     from .models import BrushSettings
     if not isinstance(data, dict):
         return
     session = await sio.get_session(sid)
-    username = session.get('username')
+    auth_user_id = session.get('auth_user_id')
     settings = data.get('settings')
-    if not username or not isinstance(settings, dict):
+    if not auth_user_id or not isinstance(settings, dict):
         return
     if len(json_mod.dumps(settings)) > _MAX_BRUSH_JSON:
         return
     try:
         await BrushSettings.objects.aupdate_or_create(
-            username=username,
+            user_id=auth_user_id,
             defaults={'settings': settings},
         )
     except Exception as e:
-        logger.error(f'[brush_settings] DB upsert failed for user {username}: {e}', exc_info=True)
+        logger.error(f'[brush_settings] ユーザー {auth_user_id} の DB 保存に失敗しました: {e}', exc_info=True)
 
 
 async def on_disconnect(sid: str, reason: Optional[str] = None) -> None:
-    """Handles user disconnection, updating room state and notifying others."""
     from .models import Room
     session = await sio.get_session(sid)
     room_id = session.get('room_id')
@@ -297,11 +374,12 @@ async def on_disconnect(sid: str, reason: Optional[str] = None) -> None:
     await sio.emit('user_left', {'id': user_id}, room=room_id)
 
     if not users:
+        # 最後の1人が退室したのでクリーンアップ対象としてタイムスタンプを記録する
         active_users.pop(room_id, None)
         await Room.objects.filter(id=room_id).aupdate(last_emptied_at=timezone.now())
 
 
-# ── Register all handlers ──────────────────────────────────────────────────────
+# ── ハンドラ登録 ───────────────────────────────────────────────────────────────
 
 def register_handlers() -> None:
     sio.on('connect', on_connect)
