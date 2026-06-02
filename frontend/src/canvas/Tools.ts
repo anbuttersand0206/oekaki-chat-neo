@@ -25,6 +25,9 @@ export class ToolManager {
   private strokeTimer: number | null = null;
   private strokeStartTime = 0;
   private isDrawing = false;
+  // 現在のストロークの入力デバイス種別（PointerEvent.pointerType 準拠: 'mouse' | 'pen' | 'touch'）
+  // マウスは筆圧を持たず常に 1.0 となるため、抜き適用の要否判定に使用する
+  private strokePointerType = 'mouse';
   // 入力平滑化 — 直近 N サンプルの加重移動平均（大きいほど滑らか、遅延も増える）
   private rawBuf: Array<{ x: number; y: number; p: number }> = [];
   private static readonly SMOOTH_WIN = 5;
@@ -288,6 +291,7 @@ export class ToolManager {
     this.lastPtX = cx; this.lastPtY = cy; this.lastPtTime = performance.now();
     this.rawBuf = []; this.prevSmX = cx; this.prevSmY = cy;
     this.lastDirX = 0; this.lastDirY = 0;
+    this.strokePointerType = e.pointerType;
     this.strokePoints = [{ x: cx, y: cy, p: pressure, sp: 0 }];
     this.strokeStartTime = performance.now();
     this.isDrawing = true;
@@ -360,8 +364,12 @@ export class ToolManager {
 
     // 抜き: ストローク終端を最終方向に延長しながら筆圧を 0 に向けてテーパーさせる。
     // 長さは「最終筆圧 × ブラシサイズ」に比例させることで自然な抜けを再現する。
+    // マウス入力は筆圧が常に 1.0 で変動しないため、抜きを適用すると終端で
+    // 意図しない急激なテーパーが生じる。ペン・タッチ入力のみ抜きを有効にする。
+    const isPressureSensitiveInput = this.strokePointerType !== 'mouse';
     const hasDir = Math.hypot(this.lastDirX, this.lastDirY) > 0.5;
-    if (hasDir && pressure > 0.02) {
+    const shouldApplyNuki = isPressureSensitiveInput && hasDir && pressure > 0.02;
+    if (shouldApplyNuki) {
       const nukiLen = pressure * s.brushConfig.size * 1.2;
       const STEPS = 6;
       for (let i = 1; i <= STEPS; i++) {

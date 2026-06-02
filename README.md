@@ -805,9 +805,7 @@ WebSocket 接続確立時（`on_connect`）に Django セッション Cookie を
 
 ### 🚀 デプロイ
 
-デプロイ先の候補は `documents/deploy_options.md` にまとめてある。  
-**最有力**: Fly.io（既存 Dockerfile ほぼそのままデプロイ可能・月 $0〜5 程度）。  
-デプロイ時に対応が必要な設定変更:
+デプロイ先は検討中。
 
 - `SESSION_COOKIE_SECURE = True`
 - `DEBUG = false`（デフォルトは `false` だが `.env` に `DEBUG=true` が残っていないか必ず確認。`True` のままだと Django がスタックトレースと設定内容を HTTP レスポンスで返す）
